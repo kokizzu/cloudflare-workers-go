@@ -6,6 +6,7 @@ export async function loadModule() {
 
 export function createRuntimeContext({ binding }) {
   return {
+    EmailMessage: undefined,
     binding,
   };
 }

@@ -55,6 +55,12 @@ async function queue(batch, env, ctx) {
   return binding.handleQueueMessageBatch(batch);
 }
 
+async function email(message, env, ctx) {
+  const binding = {};
+  await run(createRuntimeContext({ env, ctx, binding }));
+  return binding.handleEmail(message);
+}
+
 // onRequest handles request to Cloudflare Pages
 async function onRequest(ctx) {
   const binding = {};
@@ -67,5 +73,6 @@ export default {
   fetch,
   scheduled,
   queue,
+  email,
   onRequest,
 };

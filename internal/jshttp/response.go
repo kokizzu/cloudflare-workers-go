@@ -32,20 +32,29 @@ func ToResponse(res js.Value) (*http.Response, error) {
 
 // ToJSResponse converts *http.Response to JavaScript sides Response class object.
 func ToJSResponse(res *http.Response) js.Value {
-	return newJSResponse(res.StatusCode, res.Header, res.ContentLength, res.Body, nil)
+	return newJSResponse(res.StatusCode, res.Header, res.ContentLength, res.Body, nil, nil)
 }
 
 // newJSResponse creates JavaScript sides Response class object.
 //   - Response: https://developer.mozilla.org/docs/Web/API/Response
-func newJSResponse(statusCode int, headers http.Header, contentLength int64, body io.ReadCloser, rawBody *js.Value) js.Value {
+//
+// webSocket, when non-nil, is attached as ResponseInit.webSocket and forces
+// status 101 regardless of statusCode (see ResponseWriter.SetWebSocket).
+func newJSResponse(statusCode int, headers http.Header, contentLength int64, body io.ReadCloser, rawBody *js.Value, webSocket *js.Value) js.Value {
 	status := statusCode
 	if status == 0 {
 		status = http.StatusOK
+	}
+	if webSocket != nil {
+		status = http.StatusSwitchingProtocols
 	}
 	respInit := jsutil.NewObject()
 	respInit.Set("status", status)
 	respInit.Set("statusText", http.StatusText(status))
 	respInit.Set("headers", ToJSHeader(headers))
+	if webSocket != nil {
+		respInit.Set("webSocket", *webSocket)
+	}
 	if status == http.StatusSwitchingProtocols ||
 		status == http.StatusNoContent ||
 		status == http.StatusResetContent ||

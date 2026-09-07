@@ -68,6 +68,29 @@ func NewObject() js.Value {
 	return jsutil.NewObject()
 }
 
+// RuntimeContextValue reads key directly off the runtime context object
+// passed in from the JS side (env/ctx/binding, plus whatever a runtime
+// shim under cmd/workers-assets-gen/assets/runtime/*.mjs adds to
+// createRuntimeContext's return value, e.g. "connect" or "EmailMessage").
+// It returns an error if the value is undefined — either because the
+// current runtime shim (e.g. browser.mjs) doesn't provide it, or because
+// nothing has set up a runtime context at all (as in a plain `go test`
+// process).
+//
+// This mirrors cloudflare/internal/cfruntimecontext.GetRuntimeContextValue,
+// which exp/internal/jsrt cannot import directly: Go's internal/
+// visibility rule only lets code under
+// github.com/syumai/workers-go/cloudflare/... import
+// github.com/syumai/workers-go/cloudflare/internal/..., and
+// exp/internal/jsrt sits outside that tree (see the package doc comment).
+func RuntimeContextValue(key string) (js.Value, error) {
+	v := jsutil.RuntimeContext.Get(key)
+	if v.IsUndefined() {
+		return js.Value{}, fmt.Errorf("jsrt: runtime context value %q is not available", key)
+	}
+	return v, nil
+}
+
 // BytesFromJS copies the contents of a JS typed array (e.g. Uint8Array) or
 // ArrayBuffer into a new Go byte slice.
 func BytesFromJS(v js.Value) []byte {

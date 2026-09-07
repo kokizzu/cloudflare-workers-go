@@ -70,6 +70,27 @@ exp/cloudflare/<pkg>/<pkg>.go                                (hand-written, only
   `cloudflare/sockets`) and `cf` (`FromRequest`/`FromJS`, which read
   `request.cf` off a `*http.Request` — there's no IR declaration to
   generate those from at all) for examples.
+* `email` mixes both: `ForwardableEmailMessage` (the argument to a Worker's
+  `email(message, env, ctx)` handler), `SendEmail` (the binding), and
+  `EmailSendResult` are generated (`z email_gen.go`), but the outbound
+  `EmailMessage` type (`NewEmailMessage`/`NewEmailMessageString` in
+  `email.go`) is entirely hand-written: the real `cloudflare:email` module
+  class isn't visible to extract.ts at all (only an ambient global
+  `EmailMessage` *interface* stub with `from`/`to` getters is), so it's
+  fetched from the runtime context the same way `cloudflare/sockets.Connect`
+  fetches `connect()` — see `email.yaml`'s doc comment and
+  `cmd/workers-assets-gen/assets/runtime/{cloudflare,browser}.mjs`'s
+  `EmailMessage` entry. `email.Handle` registers the Worker's own
+  `email(message, env, ctx)` export (added to
+  `cmd/workers-assets-gen/assets/common/worker.mjs`) the same way
+  `cloudflare/queues.Consume` registers `queue`.
+* `websocket` (`Upgrade`, `Conn`) has no `z<pkg>_gen.go` at all — it is
+  entirely hand-written. `WebSocketPair`/`WebSocket` are `EventTarget`-based
+  (`addEventListener("message"/"close"/"error")`), not the
+  method-returns-Promise shape cfgen's IR→Go mapping expects, so there is no
+  overrides file for it either. It lives under `exp/cloudflare` (rather than
+  `cloudflare/`) purely because it wraps a runtime API with no other Go
+  binding yet, not because any part of it is generated.
 
 ### A hand-written package wrapping a generated one
 

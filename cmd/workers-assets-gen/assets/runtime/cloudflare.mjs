@@ -1,4 +1,5 @@
 import { connect } from "cloudflare:sockets";
+import { EmailMessage } from "cloudflare:email";
 import mod from "./app.wasm";
 
 export async function loadModule() {
@@ -10,6 +11,7 @@ export function createRuntimeContext({ env, ctx, binding }) {
     env,
     ctx,
     connect,
+    EmailMessage,
     binding,
   };
 }

@@ -1,0 +1,57 @@
+package: email
+doc: |
+  Package email provides the Email Workers binding
+  (https://developers.cloudflare.com/email-routing/email-workers/) and the
+  ForwardableEmailMessage passed to a Worker's email(message, env, ctx)
+  handler (registered from exp/cloudflare/email's sibling hand-written
+  email.go via jsutil.RegisterAsyncHandler("handleEmail", ...) and
+  cmd/workers-assets-gen/assets/common/worker.mjs's email export).
+
+  EmailMessage (the outbound message type SendEmail.send and
+  ForwardableEmailMessage.reply take) is deliberately left out of include:.
+  In workers-types it is an ambient global interface exposing only
+  readonly from/to getters — a stub for the real cloudflare:email module
+  class (`new EmailMessage(from, to, raw)`), which isn't represented in the
+  extracted IR at all (extract.ts only walks .d.ts top-level declarations,
+  not runtime module exports). Generating a data type from that from/to-only
+  stub would be actively wrong here: SendEmail.send and
+  ForwardableEmailMessage.reply need to pass the real class instance
+  (constructed from the runtime's own EmailMessage constructor, carrying
+  the raw MIME content) through unchanged, not a plain {from, to} object
+  encoded by a generated toJS(). So EmailMessage is left out of include:,
+  which makes every ref to it in this package fall back to the standard
+  "ref exists in the IR but not in this package's include list -> js.Value"
+  path (see exp/cloudflare/README.md's type mapping table) instead of a
+  lossy generated struct. The hand-written email.go's own EmailMessage type
+  fills that gap: it holds the real JS instance (obtained via
+  cfruntimecontext.GetRuntimeContextValue("EmailMessage"), set by the
+  runtime shims in cmd/workers-assets-gen/assets/runtime/{cloudflare,browser}.mjs)
+  and exposes JSValue() for SendEmail.Send/ForwardableEmailMessage.Reply to
+  pass straight through as the js.Value parameter cfgen already generates
+  for them.
+
+  ForwardableEmailMessage still gets From()/To() getters despite
+  EmailMessage being excluded from include:, because cfgen's extends
+  flattening resolves ancestor types against the full IR, not just this
+  package's include list.
+
+  SendEmail.send and ForwardableEmailMessage.reply are each overloaded on a
+  plain (from, to, raw) EmailMessage vs. a builder-object
+  (EmailMessageBuilder / EmailReplyMessageBuilder) form; only the plain
+  EmailMessage overload (index 0 for both) is generated, as Send/Reply. The
+  builder overloads (index 1) are skipped.
+include:
+  - SendEmail
+  - ForwardableEmailMessage
+  - EmailSendResult
+bindings:
+  - SendEmail
+types:
+  # Size in bytes; matches the R2Object.size / R2UploadedPart.partNumber
+  # precedent in r2.yaml for byte-count-ish number fields.
+  ForwardableEmailMessage.rawSize: "int"
+overloads:
+  SendEmail.send:
+    - { index: 0, name: Send }
+  ForwardableEmailMessage.reply:
+    - { index: 0, name: Reply }

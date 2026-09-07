@@ -1,0 +1,24 @@
+name = "email-forward"
+main = "./build/worker.mjs"
+compatibility_date = "2024-01-03"
+
+# Lets this Worker call SendEmail.send (exp/cloudflare/email.SendEmail /
+# email.NewEmailMessage) to send its own outbound mail, in addition to the
+# forward()/reply() calls available on any inbound ForwardableEmailMessage.
+# This example doesn't send mail itself, but a binding is still declared
+# here to show the config shape.
+# - see: https://developers.cloudflare.com/email-routing/email-workers/#send-email-from-a-worker
+[[send_email]]
+name = "SEND_EMAIL"
+# destination_address = "you@example.com"       # optional: restrict to one verified address
+# allowed_destination_addresses = ["a@example.com", "b@example.com"]  # optional: restrict to a list
+
+# There is no wrangler.toml key for the *inbound* email trigger this
+# Worker's email(message, env, ctx) handler (main.go's email.Handle)
+# responds to: instead, create an Email Routing "route" for this zone
+# (Email > Email Routing in the dashboard, or the API) with a "Send to a
+# Worker" action pointing at this Worker's script name, once it's deployed.
+# - see: https://developers.cloudflare.com/email-routing/email-workers/#enable-email-workers
+
+[build]
+command = "make build"
