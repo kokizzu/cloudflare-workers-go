@@ -1,0 +1,33 @@
+package: images
+doc: |
+  Package images provides the Cloudflare Images runtime binding
+  (https://developers.cloudflare.com/images/transform-images/bindings/).
+
+  ImagesBinding.hosted (HostedImagesBinding, the CRUD API for the Images
+  hosting product) is excluded; this package only covers the runtime
+  image-transformation API (info/input/text + ImageTransformer).
+include:
+  - ImagesBinding
+  - ImageTransformer
+  - ImageTransformationResult
+  - ImageInputOptions
+  - ImageTransform
+  - ImageDrawOptions
+  - ImageCompositeMode
+  - ImageOutputOptions
+  - ImageInfoResponse
+  - ImageTransformationResponseOptions
+  - ImageTransformationOutputOptions
+  - TextOptions
+bindings:
+  - ImagesBinding
+types:
+  # image is (ReadableStream<Uint8Array> | ImageTransformer); only the
+  # ReadableStream branch is representable generically, so it's narrowed to
+  # io.Reader (via jsrt.ReadableStreamFromReader at the call site). Passing
+  # another ImageTransformer as the image (chaining draw() straight off
+  # another transform handle, without round-tripping through bytes) isn't
+  # supported by this generated binding.
+  ImageTransformer.draw.params.image: "io.Reader"
+exclude:
+  - ImagesBinding.hosted

@@ -296,7 +296,7 @@ func (p *Package) genMethod(sb *strings.Builder, d *ir.Decl, structName string, 
 		}
 		pname := goParamName(prm.Name)
 		override := p.typeOverride(d.Name, m.Name, "params."+prm.Name)
-		conv, err := p.convFor(prm.Type, override)
+		conv, err := p.convForParam(prm.Type, override)
 		if err != nil {
 			return err
 		}

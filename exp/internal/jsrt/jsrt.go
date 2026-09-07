@@ -152,6 +152,18 @@ func ReadCloser(stream js.Value) io.ReadCloser {
 	return jsutil.ConvertReadableStreamToReadCloser(stream)
 }
 
+// WriteCloser converts a JS WritableStream into an io.WriteCloser.
+func WriteCloser(stream js.Value) io.WriteCloser {
+	return jsutil.ConvertWritableStreamToWriteCloser(stream)
+}
+
+// ReadableStreamFromReader converts an io.Reader into a JS ReadableStream. If
+// r also implements io.Closer, it is closed when the stream is closed or
+// canceled.
+func ReadableStreamFromReader(r io.Reader) js.Value {
+	return jsutil.ConvertReaderToReadableStream(r)
+}
+
 // HeadersFromJS converts a JS Headers value into an http.Header.
 func HeadersFromJS(v js.Value) http.Header {
 	return jshttp.ToHeader(v)

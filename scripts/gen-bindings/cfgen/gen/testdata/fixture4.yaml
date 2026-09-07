@@ -1,0 +1,9 @@
+package: matrices
+doc: |
+  Package matrices is a fourth synthetic fixture package, covering the
+  nested-container (array-of-array, record-of-array, array-of-record) loop
+  variable naming fix: each nesting level must use a distinct set of
+  loop/temp variable names, or an inner loop silently shadows (and
+  corrupts) an outer one's.
+include:
+  - Matrix

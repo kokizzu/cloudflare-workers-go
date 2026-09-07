@@ -206,6 +206,144 @@ func TestGenerateGolden2(t *testing.T) {
 // an out-of-range index, a duplicate index, and a literal that doesn't
 // match any parameter of the selected overload (an upstream reordering
 // guard, per spec item 1).
+// TestGenerateGoldenStreams exercises the stream type mappings from
+// tmp/06-codegen-spec.md 3.1.1: a WritableStream getter/return maps to
+// io.WriteCloser, a ReadableStream getter/return is unaffected (still
+// io.ReadCloser), a ReadableStream parameter maps to io.Reader (via
+// jsrt.ReadableStreamFromReader), a WritableStream parameter falls back to
+// js.Value, and a types: override can force io.Reader on an otherwise-
+// unresolvable union parameter.
+func TestGenerateGoldenStreams(t *testing.T) {
+	doc := loadFixtureIR(t, filepath.Join("testdata", "fixture3.json"))
+	ov, err := LoadOverrides(filepath.Join("testdata", "fixture3.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ov.Validate(doc); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Generate(doc, ov)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Warnings) != 0 {
+		t.Errorf("unexpected warnings: %v", result.Warnings)
+	}
+
+	src := string(result.Source)
+	for _, want := range []string{
+		// property/return position: unaffected by the new parameter-
+		// position mapping.
+		"func (x *Streams) Sink() io.WriteCloser {",
+		"ret = jsrt.WriteCloser(x.v.Get(\"sink\"))",
+		"func (x *Streams) Download() (io.ReadCloser, error) {",
+		// parameter position: ReadableStream -> io.Reader, converted with
+		// jsrt.ReadableStreamFromReader at the call site.
+		"func (x *Streams) Upload(body io.Reader) error {",
+		"jsrt.Call(x.v, \"upload\", jsrt.ReadableStreamFromReader(body))",
+		// parameter position: WritableStream -> js.Value (escape hatch).
+		"func (x *Streams) Attach(dest js.Value) error {",
+		// a types: override forcing io.Reader on an unresolvable union
+		// parameter.
+		"func (x *Streams) UploadRaw(data io.Reader) error {",
+		"jsrt.Call(x.v, \"uploadRaw\", jsrt.ReadableStreamFromReader(data))",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("generated source missing %q", want)
+		}
+	}
+
+	goldenPath := filepath.Join("testdata", "fixture3.golden.go.txt")
+	if *update {
+		if err := os.WriteFile(goldenPath, result.Source, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(result.Source) != string(want) {
+		t.Errorf("generated output does not match golden file %s (run `go test ./cfgen/gen/... -update` to refresh it if the change is intentional)\n--- got ---\n%s\n--- want ---\n%s", goldenPath, result.Source, want)
+	}
+}
+
+// TestGenerateGoldenNestedContainers exercises the nested array/record loop
+// variable naming fix: a directly-nested container (e.g. [][]T, or a
+// Record<string, []T>) previously reused the same loop/temp variable names
+// ("i", "e", "arr", "keys", "k", "vv", "m", "v") at every nesting level,
+// so the inner loop's declaration shadowed the outer loop's, corrupting
+// both FromJS decoding and ToJS encoding. containerSuffix now gives each
+// level beyond the first a distinct suffix.
+func TestGenerateGoldenNestedContainers(t *testing.T) {
+	doc := loadFixtureIR(t, filepath.Join("testdata", "fixture4.json"))
+	ov, err := LoadOverrides(filepath.Join("testdata", "fixture4.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ov.Validate(doc); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Generate(doc, ov)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Warnings) != 0 {
+		t.Errorf("unexpected warnings: %v", result.Warnings)
+	}
+
+	src := string(result.Source)
+	for _, want := range []string{
+		// [][]float64 / [][]string: the outer level keeps the original,
+		// unsuffixed names (no golden-file churn for a plain, non-nested
+		// []T), and the inner level gets a distinct "1"-suffixed set, so
+		// FromJS indexes with both the outer and inner index instead of
+		// the inner shadowing the outer (the corruption this fixes).
+		"[][]float64", "[][]string",
+		"for i := range out.Floats {",
+		"for i1 := range out.Floats[i] {",
+		"out.Floats[i][i1] = v.Get(\"floats\").Index(i).Index(i1).Float()",
+		"for i1, e1 := range e {",
+		"arr.SetIndex(i, arr1)",
+		"for i := range out.Words {",
+		"for i1 := range out.Words[i] {",
+		// Record<string, []string> (tags): the record's own level keeps
+		// the unsuffixed names, and the nested array value gets the
+		// suffixed set.
+		"map[string][]string",
+		"for i := 0; i < keys.Length(); i++ {",
+		"var vv []string",
+		"for i1 := range vv {",
+		"out.Tags[k] = vv",
+		// Array<Record<string, number>> (rows): the array's own level
+		// keeps the unsuffixed names, and the nested record gets the
+		// suffixed set.
+		"[]map[string]float64",
+		"for i := range out.Rows {",
+		"keys1 := js.Global().Get(\"Object\").Call(\"keys\", v.Get(\"rows\").Index(i))",
+		"for i1 := 0; i1 < keys1.Length(); i1++ {",
+		"k1 := keys1.Index(i1).String()",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("generated source missing %q", want)
+		}
+	}
+
+	goldenPath := filepath.Join("testdata", "fixture4.golden.go.txt")
+	if *update {
+		if err := os.WriteFile(goldenPath, result.Source, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(result.Source) != string(want) {
+		t.Errorf("generated output does not match golden file %s (run `go test ./cfgen/gen/... -update` to refresh it if the change is intentional)\n--- got ---\n%s\n--- want ---\n%s", goldenPath, result.Source, want)
+	}
+}
+
 func TestOverloadsRejectsBadEntries(t *testing.T) {
 	doc := loadFixtureIR(t, filepath.Join("testdata", "fixture2.json"))
 	cases := []struct {

@@ -1,0 +1,63 @@
+{
+  "source": {
+    "package": "@cloudflare/workers-types",
+    "version": "0.0.0-fixture3",
+    "entry": "index.d.ts"
+  },
+  "decls": [
+    {
+      "kind": "interface",
+      "name": "Streams",
+      "module": "",
+      "doc": "Streams exercises the stream type mappings from tmp/06-codegen-spec.md 3.1.1: a WritableStream property/return maps to io.WriteCloser, a ReadableStream property/return maps to io.ReadCloser (unchanged from before 3.1.1), a ReadableStream parameter maps to io.Reader (via jsrt.ReadableStreamFromReader), a WritableStream parameter falls back to js.Value for now, and a types: override can force io.Reader on an otherwise-unresolvable union parameter.",
+      "typeParams": [],
+      "extends": [],
+      "members": [
+        { "kind": "getter", "name": "sink", "type": { "k": "ref", "name": "WritableStream", "args": [] } },
+        {
+          "kind": "method",
+          "name": "download",
+          "doc": "returns a ReadableStream; property/return position is unaffected by the parameter-position change",
+          "params": [],
+          "returns": { "k": "ref", "name": "Promise", "args": [ { "k": "ref", "name": "ReadableStream", "args": [] } ] },
+          "typeParams": []
+        },
+        {
+          "kind": "method",
+          "name": "upload",
+          "doc": "a ReadableStream parameter maps to io.Reader",
+          "params": [
+            { "name": "body", "type": { "k": "ref", "name": "ReadableStream", "args": [] }, "optional": false, "rest": false }
+          ],
+          "returns": { "k": "ref", "name": "Promise", "args": [ { "k": "prim", "name": "void" } ] },
+          "typeParams": []
+        },
+        {
+          "kind": "method",
+          "name": "attach",
+          "doc": "a WritableStream parameter falls back to js.Value for now",
+          "params": [
+            { "name": "dest", "type": { "k": "ref", "name": "WritableStream", "args": [] }, "optional": false, "rest": false }
+          ],
+          "returns": { "k": "prim", "name": "void" },
+          "typeParams": []
+        },
+        {
+          "kind": "method",
+          "name": "uploadRaw",
+          "doc": "an otherwise-unresolvable union parameter forced to io.Reader via a types: override",
+          "params": [
+            {
+              "name": "data",
+              "type": { "k": "union", "types": [ { "k": "ref", "name": "ReadableStream", "args": [] }, { "k": "ref", "name": "NotInIR", "args": [] } ] },
+              "optional": false,
+              "rest": false
+            }
+          ],
+          "returns": { "k": "ref", "name": "Promise", "args": [ { "k": "prim", "name": "void" } ] },
+          "typeParams": []
+        }
+      ]
+    }
+  ]
+}

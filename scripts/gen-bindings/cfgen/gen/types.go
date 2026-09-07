@@ -2,6 +2,7 @@ package gen
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/syumai/workers-go/scripts/gen-bindings/cfgen/ir"
@@ -138,6 +139,52 @@ type Package struct {
 	// decl-level ones of the same name.
 	curDeclTypeParams   []ir.TypeParam
 	curMethodTypeParams []ir.TypeParam
+
+	// curInParamPosition is true while resolving the conversion for a
+	// method parameter's own type (set by convForParam), and false while
+	// resolving a getter/property or method return type. It lets refConv
+	// pick a direction-appropriate mapping for stream types, per
+	// tmp/06-codegen-spec.md 3.1.1: a ReadableStream *parameter* maps to
+	// io.Reader (values flow Go -> JS, via jsrt.ReadableStreamFromReader),
+	// while a ReadableStream *return/property* maps to io.ReadCloser
+	// (values flow JS -> Go) as before. It propagates through any nested
+	// convFor call reached from a parameter's own type (array/record
+	// element, union branch, ...), which is the desired behavior since
+	// those nested values flow in the same direction as the parameter
+	// itself.
+	curInParamPosition bool
+
+	// curContainerDepth counts how many levels of array/record wrapping
+	// are currently being resolved: arrayConv and recordConv each bump it
+	// around their own recursive convFor call for the element/value type,
+	// so a nested container's own level (e.g. the inner []T of a
+	// [][]T, or the value type of a Record<string, []T>) is one deeper
+	// than its immediate parent's. arrayOfConv/recordConv use it (via
+	// containerSuffix) to give each nesting level distinct loop/temp
+	// variable names, so an inner loop can't shadow (and silently
+	// corrupt) an outer one's index/element/key variable — see
+	// containerSuffix's doc comment.
+	curContainerDepth int
+}
+
+// containerSuffix returns the loop/temp-variable name suffix for a
+// container conversion (array or record) at nesting depth d: "" for the
+// outermost level, so a non-nested slice/map's generated code is unchanged
+// from before nested-container naming existed (no golden-file churn for the
+// common case), and the depth's decimal digits for any deeper level (e.g.
+// "1", "2", ...). Without per-depth suffixes, arrayOfConv's inner "for i :=
+// range dst[i]" (built while generating a [][]T's inner slice conversion)
+// shadows the outer loop's own "i", so the inner loop body's "dst[i][i]"
+// reads and writes the wrong indices — the outer index is lost the moment
+// the inner "i" comes into scope. The same shadowing corrupts any other
+// combination of directly-nested arrayConv/recordConv (Record<string,
+// []T>, []Record<string, T>, ...), since the inner container's FromJS/ToJS
+// closures are spliced directly into the outer container's own loop body.
+func containerSuffix(depth int) string {
+	if depth == 0 {
+		return ""
+	}
+	return strconv.Itoa(depth)
 }
 
 func NewPackage(doc *ir.IR, ov *Overrides) *Package {
@@ -226,6 +273,20 @@ func (p *Package) typeOverride(declName, member, suffix string) string {
 		key += "." + suffix
 	}
 	return p.Ov.Types[key]
+}
+
+// convForParam is convFor for a method parameter's own type: it sets
+// curInParamPosition around the call (restoring the previous value
+// afterward, so a nested call from within a data type's field/method
+// resolution isn't accidentally left in "param" mode) so refConv can pick
+// the argument-direction mapping for stream types (ReadableStream ->
+// io.Reader, WritableStream -> js.Value) instead of the
+// return/property-direction one.
+func (p *Package) convForParam(t *ir.Type, override string) (exprConv, error) {
+	prev := p.curInParamPosition
+	p.curInParamPosition = true
+	defer func() { p.curInParamPosition = prev }()
+	return p.convFor(t, override)
 }
 
 // convFor resolves the Go conversion for an IR type, applying override (a
@@ -330,46 +391,48 @@ func (p *Package) arrayConv(elem *ir.Type) (exprConv, error) {
 	if elem == nil {
 		elem = &ir.Type{K: "prim", Name: "any"}
 	}
+	depth := p.curContainerDepth
+	p.curContainerDepth++
 	ec, err := p.convFor(elem, "")
+	p.curContainerDepth = depth
 	if err != nil {
 		return exprConv{}, err
 	}
-	return arrayOfConv(ec), nil
+	return arrayOfConv(ec, depth), nil
 }
 
 // arrayOfConv builds a plain-JS-Array <-> Go slice conversion given the
-// element conversion. Element conversions that themselves require
-// pre-statements in ToJS are not supported (not needed by the current
-// generation targets) and fall back with a warning handled by the caller.
-func arrayOfConv(elem exprConv) exprConv {
+// element conversion and this array's own nesting depth (see
+// curContainerDepth/containerSuffix). Element conversions that themselves
+// require pre-statements in ToJS are not supported (not needed by the
+// current generation targets) and fall back with a warning handled by the
+// caller.
+func arrayOfConv(elem exprConv, depth int) exprConv {
 	goType := "[]" + elem.GoType
+	suf := containerSuffix(depth)
+	idxVar, elemVar, arrVar := "i"+suf, "e"+suf, "arr"+suf
 	return exprConv{
 		GoType: goType,
 		FromJS: func(dst, src, failReturn string) []string {
 			lines := []string{
 				dst + " = make(" + goType + ", " + src + ".Length())",
-				"for i := range " + dst + " {",
+				"for " + idxVar + " := range " + dst + " {",
 			}
-			inner := elem.FromJS(dst+"[i]", src+".Index(i)", failReturn)
+			inner := elem.FromJS(dst+"["+idxVar+"]", src+".Index("+idxVar+")", failReturn)
 			lines = append(lines, indentAll(inner)...)
 			lines = append(lines, "}")
 			return lines
 		},
 		ToJS: func(src string) ([]string, string) {
-			arrVar := "arr"
-			pre, elemExpr := elem.ToJS("e")
+			pre, elemExpr := elem.ToJS(elemVar)
 			var lines []string
 			lines = append(lines, arrVar+" := js.Global().Get(\"Array\").New(len("+src+"))")
-			if len(pre) == 0 {
-				lines = append(lines, "for i, e := range "+src+" {")
-				lines = append(lines, "\t"+arrVar+".SetIndex(i, "+elemExpr+")")
-				lines = append(lines, "}")
-			} else {
-				lines = append(lines, "for i, e := range "+src+" {")
+			lines = append(lines, "for "+idxVar+", "+elemVar+" := range "+src+" {")
+			if len(pre) > 0 {
 				lines = append(lines, indentAll(pre)...)
-				lines = append(lines, "\t"+arrVar+".SetIndex(i, "+elemExpr+")")
-				lines = append(lines, "}")
 			}
+			lines = append(lines, "\t"+arrVar+".SetIndex("+idxVar+", "+elemExpr+")")
+			lines = append(lines, "}")
 			return lines, arrVar
 		},
 		ZeroExpr:   "nil",
@@ -377,40 +440,47 @@ func arrayOfConv(elem exprConv) exprConv {
 	}
 }
 
+// recordConv builds a plain-JS-object <-> Go map conversion for
+// Record<string, val>, using curContainerDepth/containerSuffix (the same
+// scheme as arrayOfConv) to give each nesting level of a Record-of-Record,
+// Record-of-array, array-of-Record, ... distinct loop/temp variable names.
 func (p *Package) recordConv(val *ir.Type) (exprConv, error) {
+	depth := p.curContainerDepth
+	p.curContainerDepth++
 	vc, err := p.convFor(val, "")
+	p.curContainerDepth = depth
 	if err != nil {
 		return exprConv{}, err
 	}
 	goType := "map[string]" + vc.GoType
+	suf := containerSuffix(depth)
+	keysVar, idxVar, keyVar, valVar, mapVar, rangeValVar := "keys"+suf, "i"+suf, "k"+suf, "vv"+suf, "m"+suf, "v"+suf
 	return exprConv{
 		GoType: goType,
 		FromJS: func(dst, src, failReturn string) []string {
 			lines := []string{
 				dst + " = make(" + goType + ")",
-				"keys := js.Global().Get(\"Object\").Call(\"keys\", " + src + ")",
-				"for i := 0; i < keys.Length(); i++ {",
-				"\tk := keys.Index(i).String()",
+				keysVar + " := js.Global().Get(\"Object\").Call(\"keys\", " + src + ")",
+				"for " + idxVar + " := 0; " + idxVar + " < " + keysVar + ".Length(); " + idxVar + "++ {",
+				"\t" + keyVar + " := " + keysVar + ".Index(" + idxVar + ").String()",
 			}
-			var vv string
-			lines = append(lines, "\tvar vv "+vc.GoType)
-			vv = "vv"
-			inner := vc.FromJS(vv, src+".Get(k)", failReturn)
+			lines = append(lines, "\tvar "+valVar+" "+vc.GoType)
+			inner := vc.FromJS(valVar, src+".Get("+keyVar+")", failReturn)
 			lines = append(lines, indentAll(inner)...)
-			lines = append(lines, "\t"+dst+"[k] = "+vv)
+			lines = append(lines, "\t"+dst+"["+keyVar+"] = "+valVar)
 			lines = append(lines, "}")
 			return lines
 		},
 		ToJS: func(src string) ([]string, string) {
-			pre, valExpr := vc.ToJS("v")
+			pre, valExpr := vc.ToJS(rangeValVar)
 			lines := []string{
-				"m := jsrt.NewObject()",
-				"for k, v := range " + src + " {",
+				mapVar + " := jsrt.NewObject()",
+				"for " + keyVar + ", " + rangeValVar + " := range " + src + " {",
 			}
 			lines = append(lines, indentAll(pre)...)
-			lines = append(lines, "\tm.Set(k, "+valExpr+")")
+			lines = append(lines, "\t"+mapVar+".Set("+keyVar+", "+valExpr+")")
 			lines = append(lines, "}")
-			return lines, "m"
+			return lines, mapVar
 		},
 		ZeroExpr:   "nil",
 		OmitIfZero: func(expr string) string { return "len(" + expr + ") > 0" },
@@ -477,6 +547,35 @@ func readCloserConv() exprConv {
 	}
 }
 
+// readerParamConv is the argument-position mapping for a ReadableStream<...>
+// type (tmp/06-codegen-spec.md 3.1.1): the Go parameter is an io.Reader, and
+// ToJS converts it to a JS ReadableStream via jsrt.ReadableStreamFromReader.
+// FromJS is provided for completeness (a data-type field reached only from a
+// parameter's own type could in principle need it) and mirrors
+// readCloserConv's.
+func readerParamConv() exprConv {
+	return exprConv{
+		GoType:     "io.Reader",
+		FromJS:     func(dst, src, _ string) []string { return []string{dst + " = jsrt.ReadCloser(" + src + ")"} },
+		ToJS:       func(src string) ([]string, string) { return nil, "jsrt.ReadableStreamFromReader(" + src + ")" },
+		ZeroExpr:   "nil",
+		OmitIfZero: func(expr string) string { return expr + " != nil" },
+	}
+}
+
+// writeCloserConv is the return/property-position mapping for a
+// WritableStream type (tmp/06-codegen-spec.md 3.1.1): FromJS wraps the JS
+// value as an io.WriteCloser via jsrt.WriteCloser.
+func writeCloserConv() exprConv {
+	return exprConv{
+		GoType:     "io.WriteCloser",
+		FromJS:     func(dst, src, _ string) []string { return []string{dst + " = jsrt.WriteCloser(" + src + ")"} },
+		ToJS:       func(src string) ([]string, string) { return nil, src },
+		ZeroExpr:   "nil",
+		OmitIfZero: func(expr string) string { return expr + " != nil" },
+	}
+}
+
 func (p *Package) refConv(t *ir.Type) (exprConv, error) {
 	switch t.Name {
 	case "Array", "Iterable":
@@ -518,7 +617,21 @@ func (p *Package) refConv(t *ir.Type) (exprConv, error) {
 	case "ReadableStream":
 		p.useImport("jsrt")
 		p.useImport("io")
+		if p.curInParamPosition {
+			return readerParamConv(), nil
+		}
 		return readCloserConv(), nil
+	case "WritableStream":
+		if p.curInParamPosition {
+			// Argument-position WritableStream is left as a raw escape
+			// hatch for now (tmp/06-codegen-spec.md 3.1.1: "引数の
+			// WritableStream → js.Value（当面）"); no generated method in
+			// the current packages actually takes one.
+			return jsValueConv(), nil
+		}
+		p.useImport("jsrt")
+		p.useImport("io")
+		return writeCloserConv(), nil
 	case "Request", "Response":
 		// Left as a raw escape hatch; L2 idiomatic packages translate these.
 		return jsValueConv(), nil
@@ -802,7 +915,7 @@ func (p *Package) convForOverride(t *ir.Type, override string) (exprConv, error)
 		if err != nil {
 			return exprConv{}, fmt.Errorf("unsupported types: override %q: %w", override, err)
 		}
-		return arrayOfConv(elemConv), nil
+		return arrayOfConv(elemConv, p.curContainerDepth), nil
 	}
 	return p.namedTypeConv(override)
 }
@@ -814,6 +927,10 @@ func (p *Package) namedTypeConv(override string) (exprConv, error) {
 	switch override {
 	case "js.Value":
 		return jsValueConv(), nil
+	case "io.Reader":
+		p.useImport("jsrt")
+		p.useImport("io")
+		return readerParamConv(), nil
 	case "string":
 		return scalarConv("string", ".String()", `""`), nil
 	case "float32":
