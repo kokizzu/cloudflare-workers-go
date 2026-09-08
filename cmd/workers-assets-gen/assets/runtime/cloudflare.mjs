@@ -6,12 +6,13 @@ export async function loadModule() {
   return mod;
 }
 
-export function createRuntimeContext({ env, ctx, binding }) {
+export function createRuntimeContext({ env, ctx, binding, durableObject }) {
   return {
     env,
     ctx,
     connect,
     EmailMessage,
     binding,
+    durableObject,
   };
 }

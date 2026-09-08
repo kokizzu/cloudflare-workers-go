@@ -75,10 +75,9 @@ exp/cloudflare/<pkg>/<pkg>.go                                (hand-written, only
   `DurableObjectNamespace`, `SQLStorage`/`SQLStorageCursor`); `storage.go`
   adds a few hand-written convenience helpers on top
   (`GetString`/`PutString`, `GetJSON`/`PutJSON`, `Alarm`, and
-  `SQLStorageCursor.Rows`). Hosting a Go type as a Durable Object class
-  (running `DurableObjectState`'s fetch/alarm/webSocket* triggers against a
-  registered Go implementation) is a separate, hand-written concern that
-  doesn't live here yet.
+  `SQLStorageCursor.Rows`). `host.go` adds the separate, hand-written
+  concern of *hosting* a Go type as a Durable Object class — see
+  "Hosting a Go type as a Durable Object" below.
 * `email` mixes both: `ForwardableEmailMessage` (the argument to a Worker's
   `email(message, env, ctx)` handler), `SendEmail` (the binding), and
   `EmailSendResult` are generated (`z email_gen.go`), but the outbound
@@ -114,6 +113,109 @@ the result to L2's own, narrower, pre-existing API (e.g. turning a nil
 `*string` from `GetText` into `kv.ErrNotFound`). `cloudflare/r2`, `cache`,
 and `queues`' producer side (`Producer`, `MessageSendRequest`, ...) follow
 the same pattern against `exp/cloudflare/{r2,cache,queues}`.
+
+## Hosting a Go type as a Durable Object
+
+`exp/cloudflare/durableobjects/host.go` lets a Worker host a Go type as a
+[Durable Object](https://developers.cloudflare.com/durable-objects/) class,
+in addition to (or instead of) the regular `workers.Serve(handler)` fetch
+path. See `_examples/durable-object-go` for a complete, runnable
+example.
+
+### The 1-instance-per-object model
+
+Every other trigger this module supports (`fetch`, `scheduled`, `queue`,
+`email`) follows the same shape: `worker.mjs`'s `run()` boots a *new* wasm
+instance for every single trigger invocation, and that instance exits once
+the trigger's response/promise settles (`workers.Serve`'s `Done()` channel
+closes when the response body is fully read). A Durable Object breaks that
+assumption on purpose: the whole point of a Durable Object is that its
+in-memory state (and here, that includes whatever a Go program keeps in
+memory, not just `ctx.storage`) survives across many `fetch`/`alarm`/
+`webSocket*` triggers delivered to the same object over its lifetime.
+
+So Durable Object hosting keeps **one wasm instance alive for one Durable
+Object instance's whole lifetime**, and dispatches every trigger it
+receives to the same Go value:
+
+* `worker.mjs`'s `GoDurableObject` base class (which a generated subclass
+  extends — see below) calls `run()` at most once per JS-side Durable
+  Object instance, memoizing the resulting binding object; every
+  `fetch`/`alarm`/`webSocket*` call on that instance reuses it instead of
+  booting a new wasm instance.
+* On the Go side, `durableobjects.Register(className, ctor)` records a
+  `Constructor` for a class name (call it before `workers.Serve`, at the top
+  of `main`). The first trigger any wasm instance receives looks up its
+  `durableObject.className` (set by `GoDurableObject`) in that registry and
+  calls the matching `Constructor` exactly once (guarded by a
+  `sync.Once`-like mechanism); every later trigger on that same instance
+  reuses the same `durableobjects.Object` value.
+* Because of this, a Durable Object's `fetch` trigger does **not** close
+  `workers.Done()` the way `workers.Serve`'s own fetch handler does — the Go
+  program has to stay alive for the next trigger. (`durableobjects.Object`'s
+  `ServeHTTP` is dispatched through the same `internal/jshttp.ServeRequest`
+  helper `handler_js.go`'s `handleRequest` uses, just with `onBodyClosed`
+  passed as `nil` instead of a callback that closes `Done()`.)
+* A Worker can both host Durable Objects and serve regular HTTP traffic in
+  the same binary: call `durableobjects.Register(...)` for each class, then
+  call `workers.Serve(handler)` as usual. `workers.Serve` only blocks the
+  *fetch-triggered* wasm instances; a Durable Object trigger dispatches
+  through `durableobjects`' own registered handlers (`handleDurableObjectFetch`
+  etc.) instead of ever calling into `workers.Serve`'s `handleRequest`, so
+  the two don't interfere with each other — each trigger still gets its own
+  wasm instance except for the "reuse across a Durable Object's lifetime"
+  case described above.
+
+### Wiring it up
+
+1. Implement `durableobjects.Object` (just `http.Handler`) for your type,
+   and optionally `durableobjects.AlarmHandler` /
+   `WebSocketMessageHandler` / `WebSocketCloseHandler` /
+   `WebSocketErrorHandler` for whichever other triggers you need — each is
+   dispatched only if your type implements it; a trigger for one you didn't
+   implement rejects with an error instead of silently doing nothing.
+2. In `main`, before `workers.Serve` (or any other blocking call):
+   ```go
+   durableobjects.Register("Counter", func(state *durableobjects.DurableObjectState, env js.Value) (durableobjects.Object, error) {
+       return &Counter{state: state}, nil
+   })
+   ```
+   `durableobjects.State()` also returns the current instance's
+   `*DurableObjectState` from anywhere in your handler's call graph.
+3. Build with `-durable-objects=Counter` (comma-separate multiple classes):
+   ```sh
+   go run github.com/syumai/workers-go/cmd/workers-assets-gen -mode=go -durable-objects=Counter
+   ```
+   This appends one subclass definition per name to the generated
+   `worker.mjs`:
+   ```js
+   export class Counter extends GoDurableObject { static goClassName = "Counter"; }
+   ```
+   The name passed here, the `class_name` in `wrangler.toml`'s
+   `[[durable_objects.bindings]]`, and the `className` given to
+   `durableobjects.Register` must all match exactly.
+4. Add the binding and a migration to `wrangler.toml`:
+   ```toml
+   [[durable_objects.bindings]]
+   name = "COUNTER"
+   class_name = "Counter"
+
+   [[migrations]]
+   tag = "v1"
+   new_sqlite_classes = ["Counter"]
+   ```
+
+### WebSocket hibernation
+
+`WebSocketMessageHandler`/`WebSocketCloseHandler`/`WebSocketErrorHandler`
+hand you the raw `syscall/js.Value` for the WebSocket (`ws`), not
+`exp/cloudflare/websocket.Conn` — these triggers only fire for a WebSocket
+accepted via `DurableObjectState.AcceptWebSocket` (the
+[hibernatable WebSocket API](https://developers.cloudflare.com/durable-objects/best-practices/websockets/)),
+which is a different JS object shape than the `WebSocketPair`-based
+`Conn` that package wraps. Call methods directly on the `js.Value` (`ws.Call("send", ...)`,
+`ws.Call("close", ...)`, ...) for now; a typed wrapper integrating this with
+`exp/cloudflare/websocket` is future work.
 
 ## Regenerating the bindings
 
