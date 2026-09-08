@@ -1,0 +1,79 @@
+{
+  "source": {
+    "package": "@cloudflare/workers-types",
+    "version": "0.0.0-fixture5",
+    "entry": "index.d.ts"
+  },
+  "decls": [
+    {
+      "kind": "interface",
+      "name": "Registry",
+      "module": "",
+      "doc": "Registry exercises the tmp/06-codegen-spec.md 4.1 cfgen extensions: a Map<string, T>-returning method (with a resolvable value type, and with an unresolvable typeParam value type falling back to js.Value) and rest parameters (an any-typed one, spread straight into jsrt.Call, and a string-typed one, converted element by element).",
+      "typeParams": [],
+      "extends": [],
+      "members": [
+        {
+          "kind": "method",
+          "name": "getAll",
+          "doc": "a Map<string, string> return becomes map[string]string",
+          "params": [],
+          "returns": {
+            "k": "ref",
+            "name": "Promise",
+            "args": [
+              { "k": "ref", "name": "Map", "args": [ { "k": "prim", "name": "string" }, { "k": "prim", "name": "string" } ] }
+            ]
+          },
+          "typeParams": []
+        },
+        {
+          "kind": "method",
+          "name": "getAllRaw",
+          "doc": "a Map<string, T> return with an unresolved typeParam value falls back to map[string]js.Value",
+          "params": [],
+          "returns": {
+            "k": "ref",
+            "name": "Promise",
+            "args": [
+              { "k": "ref", "name": "Map", "args": [ { "k": "prim", "name": "string" }, { "k": "typeParam", "name": "T" } ] }
+            ]
+          },
+          "typeParams": [ { "name": "T" } ]
+        },
+        {
+          "kind": "method",
+          "name": "log",
+          "doc": "a rest parameter whose element type is any becomes a Go ...any spread directly into jsrt.Call",
+          "params": [
+            { "name": "level", "type": { "k": "prim", "name": "string" }, "optional": false, "rest": false },
+            {
+              "name": "args",
+              "type": { "k": "array", "elem": { "k": "prim", "name": "any" } },
+              "optional": false,
+              "rest": true
+            }
+          ],
+          "returns": { "k": "prim", "name": "void" },
+          "typeParams": []
+        },
+        {
+          "kind": "method",
+          "name": "tag",
+          "doc": "a rest parameter whose element type resolves to a concrete Go type (string) is converted element by element into a []any before the call",
+          "params": [
+            { "name": "name", "type": { "k": "prim", "name": "string" }, "optional": false, "rest": false },
+            {
+              "name": "values",
+              "type": { "k": "array", "elem": { "k": "prim", "name": "string" } },
+              "optional": false,
+              "rest": true
+            }
+          ],
+          "returns": { "k": "prim", "name": "void" },
+          "typeParams": []
+        }
+      ]
+    }
+  ]
+}

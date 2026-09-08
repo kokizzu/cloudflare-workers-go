@@ -70,6 +70,15 @@ exp/cloudflare/<pkg>/<pkg>.go                                (hand-written, only
   `cloudflare/sockets`) and `cf` (`FromRequest`/`FromJS`, which read
   `request.cf` off a `*http.Request` — there's no IR declaration to
   generate those from at all) for examples.
+* `durableobjects` generates the Durable Objects bindings
+  (`DurableObjectState`, `DurableObjectStorage`, `DurableObjectID`,
+  `DurableObjectNamespace`, `SQLStorage`/`SQLStorageCursor`); `storage.go`
+  adds a few hand-written convenience helpers on top
+  (`GetString`/`PutString`, `GetJSON`/`PutJSON`, `Alarm`, and
+  `SQLStorageCursor.Rows`). Hosting a Go type as a Durable Object class
+  (running `DurableObjectState`'s fetch/alarm/webSocket* triggers against a
+  registered Go implementation) is a separate, hand-written concern that
+  doesn't live here yet.
 * `email` mixes both: `ForwardableEmailMessage` (the argument to a Worker's
   `email(message, env, ctx)` handler), `SendEmail` (the binding), and
   `EmailSendResult` are generated (`z email_gen.go`), but the outbound
@@ -184,9 +193,10 @@ types:                             # override the Go type for one field,
                                     # keys: "Decl" (alias types only),
                                     # "Decl.member", "Decl.method.returns",
                                     # or "Decl.method.params.<name>".
-                                    # supported values: js.Value, []string,
-                                    # []float32, []float64, []bool, int,
-                                    # *int, map[string]any
+                                    # supported values: js.Value, io.Reader,
+                                    # time.Time, []string, []float32,
+                                    # []float64, []bool, int, *int,
+                                    # map[string]any
   AnalyticsEngineDataPoint.indexes: "[]string"
   Vectorize.query.params.vector: "[]float32"
   Hyperdrive.connect.returns: "js.Value"
@@ -241,6 +251,8 @@ exclude:                           # drop a specific member of an included
 | `ref Promise<T>` | method return becomes `(T, error)` | `jsrt.Await` |
 | `ref Array<T>` / `array` | `[]T` | loop |
 | `ref Record<string, T>` / `index` | `map[string]T` | `Object.keys` loop |
+| `ref Map<string, T>` | `map[string]T` | `Array.from(v.keys())`/`v.get(k)` loop (a JS `Map`, unlike a `Record`, isn't a plain object) |
+| a rest parameter (`...args: T[]`) | a Go variadic parameter (`args ...T`) | `T` is `any` -> `...any`, spread straight into `jsrt.Call`; otherwise each element is converted individually into a `[]any` ahead of the call |
 | `ref ArrayBuffer` / `Uint8Array` | `[]byte` | `jsrt.BytesFromJS`/`BytesToJS` |
 | `ref Float32Array` / `Float64Array` | `[]float32` / `[]float64` | `jsrt.Float32ArrayFromJS`/`ToJS` (and `Float64...`) |
 | `ref ReadableStream<...>` | `io.ReadCloser` | `jsrt.ReadCloser` |

@@ -344,6 +344,82 @@ func TestGenerateGoldenNestedContainers(t *testing.T) {
 	}
 }
 
+// TestGenerateGoldenMapAndRest exercises the cfgen extensions from
+// tmp/06-codegen-spec.md section 4.1: a Map<string, T> return value becomes
+// map[string]T (via Array.from(v.keys())/v.get(k), not Object.keys, since a
+// JS Map isn't a plain object) — both for a resolvable T (string) and for an
+// unresolved typeParam T (falling back to map[string]js.Value, with a
+// warning) — and a rest parameter becomes a Go variadic parameter: ...any
+// (spread directly into jsrt.Call) when its element type itself maps to
+// js.Value, or ...T with an element-by-element []any conversion built ahead
+// of the call otherwise.
+func TestGenerateGoldenMapAndRest(t *testing.T) {
+	doc := loadFixtureIR(t, filepath.Join("testdata", "fixture5.json"))
+	ov, err := LoadOverrides(filepath.Join("testdata", "fixture5.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ov.Validate(doc); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Generate(doc, ov)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantWarnings := []string{
+		`type parameter "T" used outside of a supported context, falling back to js.Value`,
+	}
+	if !slicesEqual(wantWarnings, result.Warnings) {
+		t.Errorf("Warnings = %v, want %v", result.Warnings, wantWarnings)
+	}
+
+	src := string(result.Source)
+	for _, want := range []string{
+		// Map<string, string> -> map[string]string, decoded via
+		// Array.from(v.keys())/v.get(k).
+		"func (x *Registry) GetAll() (map[string]string, error) {",
+		"mapKeys := js.Global().Get(\"Array\").Call(\"from\", r.Call(\"keys\"))",
+		"mapKey := mapKeys.Index(mapIdx).String()",
+		"mapVal = r.Call(\"get\", mapKey).String()",
+		"ret[mapKey] = mapVal",
+		// Map<string, T> with unresolved T -> map[string]js.Value.
+		"func (x *Registry) GetAllRaw() (map[string]js.Value, error) {",
+		// A rest parameter whose element is any becomes ...any. Since it
+		// isn't the method's only argument (level precedes it), and Go
+		// disallows mixing an individually-listed argument with a trailing
+		// spread for the same variadic parameter, level is folded into a
+		// []any ahead of the spread rather than listed separately.
+		"func (x *Registry) Log(level string, args ...any) error {",
+		"jsrt.Call(x.v, \"log\", append([]any{level}, args...)...)",
+		// A rest parameter whose element resolves to a concrete Go type
+		// becomes ...T, with a []any built ahead of the call, then folded
+		// together with the leading name argument the same way.
+		"func (x *Registry) Tag(name string, values ...string) error {",
+		"arg1 := make([]any, len(values))",
+		"for i, e := range values {",
+		"arg1[i] = e",
+		"jsrt.Call(x.v, \"tag\", append([]any{name}, arg1...)...)",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("generated source missing %q", want)
+		}
+	}
+
+	goldenPath := filepath.Join("testdata", "fixture5.golden.go.txt")
+	if *update {
+		if err := os.WriteFile(goldenPath, result.Source, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(result.Source) != string(want) {
+		t.Errorf("generated output does not match golden file %s (run `go test ./cfgen/gen/... -update` to refresh it if the change is intentional)\n--- got ---\n%s\n--- want ---\n%s", goldenPath, result.Source, want)
+	}
+}
+
 func TestOverloadsRejectsBadEntries(t *testing.T) {
 	doc := loadFixtureIR(t, filepath.Join("testdata", "fixture2.json"))
 	cases := []struct {

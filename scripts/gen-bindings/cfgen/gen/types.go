@@ -487,6 +487,62 @@ func (p *Package) recordConv(val *ir.Type) (exprConv, error) {
 	}, nil
 }
 
+// mapConv builds a JS Map<string, V> <-> Go map[string]V conversion, per
+// tmp/06-codegen-spec.md 4.1: FromJS iterates Array.from(v.keys()) and reads
+// each value with v.get(k) (a JS Map, unlike a Record/plain object, doesn't
+// support Object.keys/property-get); ToJS is provided for symmetry (no
+// generated package currently needs it) using the JS Map constructor and
+// .set(). Uses curContainerDepth/containerSuffix like arrayOfConv/recordConv
+// so a Map nested inside another container gets distinct loop/temp variable
+// names.
+func (p *Package) mapConv(val *ir.Type) (exprConv, error) {
+	depth := p.curContainerDepth
+	p.curContainerDepth++
+	vc, err := p.convFor(val, "")
+	p.curContainerDepth = depth
+	if err != nil {
+		return exprConv{}, err
+	}
+	goType := "map[string]" + vc.GoType
+	suf := containerSuffix(depth)
+	// Named distinctly from arrayOfConv/recordConv's "keys"/"i"/"k"/... (and
+	// prefixed so they can't collide with a real Go parameter name in the
+	// same function, e.g. DurableObjectStorage.GetMultiple's own "keys"
+	// parameter, which a plain "keys" here would shadow-redeclare into a
+	// "no new variables on left side of :=" compile error).
+	keysVar, idxVar, keyVar, valVar, mapVar, rangeValVar := "mapKeys"+suf, "mapIdx"+suf, "mapKey"+suf, "mapVal"+suf, "mapObj"+suf, "mapRV"+suf
+	return exprConv{
+		GoType: goType,
+		FromJS: func(dst, src, failReturn string) []string {
+			lines := []string{
+				dst + " = make(" + goType + ")",
+				keysVar + " := js.Global().Get(\"Array\").Call(\"from\", " + src + ".Call(\"keys\"))",
+				"for " + idxVar + " := 0; " + idxVar + " < " + keysVar + ".Length(); " + idxVar + "++ {",
+				"\t" + keyVar + " := " + keysVar + ".Index(" + idxVar + ").String()",
+			}
+			lines = append(lines, "\tvar "+valVar+" "+vc.GoType)
+			inner := vc.FromJS(valVar, src+".Call(\"get\", "+keyVar+")", failReturn)
+			lines = append(lines, indentAll(inner)...)
+			lines = append(lines, "\t"+dst+"["+keyVar+"] = "+valVar)
+			lines = append(lines, "}")
+			return lines
+		},
+		ToJS: func(src string) ([]string, string) {
+			pre, valExpr := vc.ToJS(rangeValVar)
+			lines := []string{
+				mapVar + " := js.Global().Get(\"Map\").New()",
+				"for " + keyVar + ", " + rangeValVar + " := range " + src + " {",
+			}
+			lines = append(lines, indentAll(pre)...)
+			lines = append(lines, "\t"+mapVar+".Call(\"set\", "+keyVar+", "+valExpr+")")
+			lines = append(lines, "}")
+			return lines, mapVar
+		},
+		ZeroExpr:   "nil",
+		OmitIfZero: func(expr string) string { return "len(" + expr + ") > 0" },
+	}, nil
+}
+
 func bytesConv() exprConv {
 	return exprConv{
 		GoType:     "[]byte",
@@ -597,6 +653,16 @@ func (p *Package) refConv(t *ir.Type) (exprConv, error) {
 		}
 		p.useImport("jsrt")
 		return p.recordConv(val)
+	case "Map":
+		// tmp/06-codegen-spec.md 4.1: Map<string, T> -> map[string]T (Map's
+		// key type isn't checked; every generated use is Map<string, ...>).
+		var val *ir.Type
+		if len(t.Args) > 1 {
+			val = &t.Args[1]
+		} else {
+			val = &ir.Type{K: "prim", Name: "any"}
+		}
+		return p.mapConv(val)
 	case "ArrayBuffer", "Uint8Array":
 		p.useImport("jsrt")
 		return bytesConv(), nil
@@ -931,6 +997,13 @@ func (p *Package) namedTypeConv(override string) (exprConv, error) {
 		p.useImport("jsrt")
 		p.useImport("io")
 		return readerParamConv(), nil
+	case "time.Time":
+		// Used to pick the Date side of a "number | Date" union a param
+		// can't otherwise resolve (e.g. DurableObjectStorage.setAlarm's
+		// scheduledTime), per tmp/06-codegen-spec.md 4.1.
+		p.useImport("jsrt")
+		p.useImport("time")
+		return dateConv(), nil
 	case "string":
 		return scalarConv("string", ".String()", `""`), nil
 	case "float32":

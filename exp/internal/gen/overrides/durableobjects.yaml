@@ -1,0 +1,86 @@
+package: durableobjects
+doc: |
+  Package durableobjects provides the Level 1 (generated) Durable Objects
+  bindings: DurableObjectState, DurableObjectStorage, DurableObjectId,
+  DurableObjectNamespace, SqlStorage, and SqlStorageCursor. See
+  tmp/06-codegen-spec.md section 4.1.
+
+  Hosting a Go type as a Durable Object class (running DurableObjectState's
+  fetch/alarm/webSocket* triggers against a registered Go implementation) is
+  hand-written, not generated — see host.go.
+include:
+  - DurableObjectState
+  - DurableObjectStorage
+  - DurableObjectGetOptions
+  - DurableObjectPutOptions
+  - DurableObjectListOptions
+  - DurableObjectSetAlarmOptions
+  - DurableObjectGetAlarmOptions
+  - DurableObjectAbortOptions
+  - DurableObjectId
+  - DurableObjectNamespace
+  - DurableObjectNamespaceNewUniqueIdOptions
+  - DurableObjectNamespaceGetDurableObjectOptions
+  - DurableObjectJurisdiction
+  - DurableObjectLocationHint
+  - DurableObjectRoutingMode
+  - SqlStorage
+  - SqlStorageCursor
+  - AlarmInvocationInfo
+bindings:
+  - DurableObjectNamespace
+rename:
+  DurableObjectId.toString: String
+types:
+  # waitUntil's promise is Promise<any>; refConv only maps "ref Promise<T>"
+  # at a *return* position, so left unconfigured this would warn ("Promise
+  # type outside of a method return position") even though it already
+  # resolves to js.Value on its own. Spelling it out avoids the warning and
+  # documents the intent.
+  DurableObjectState.waitUntil.params.promise: js.Value
+  # ws (a raw WebSocket) isn't in this package's include list — the
+  # exp/cloudflare/websocket integration is future work (see
+  # tmp/06-codegen-spec.md 4.2's note on DurableObjectState.AcceptWebSocket).
+  DurableObjectState.acceptWebSocket.params.ws: js.Value
+  DurableObjectState.getWebSockets.returns: "[]js.Value"
+  DurableObjectState.getTags.params.ws: js.Value
+  # scheduledTime is (number | Date) in the .d.ts; cfgen's union handling
+  # can't resolve a two-branch non-literal union on its own, so this picks
+  # the Date side explicitly (jsrt.TimeToDate always emits a Date, which the
+  # runtime accepts).
+  DurableObjectStorage.setAlarm.params.scheduledTime: time.Time
+overloads:
+  # get/put/delete are each overloaded on single-key vs. multi-key; unlike
+  # every other generated package (which picks one overload and skips the
+  # rest), both are wanted here under distinct names.
+  DurableObjectStorage.get:
+    - { index: 0, name: Get }
+    - { index: 1, name: GetMultiple }
+  DurableObjectStorage.put:
+    - { index: 0, name: Put }
+    - { index: 1, name: PutMultiple }
+  DurableObjectStorage.delete:
+    - { index: 0, name: Delete }
+    - { index: 1, name: DeleteMultiple }
+exclude:
+  - DurableObjectState.blockConcurrencyWhile
+  - DurableObjectState.exports
+  - DurableObjectState.props
+  - DurableObjectState.container
+  - DurableObjectState.facets
+  - DurableObjectState.setWebSocketAutoResponse
+  - DurableObjectState.getWebSocketAutoResponse
+  - DurableObjectState.getWebSocketAutoResponseTimestamp
+  - DurableObjectState.setHibernatableWebSocketEventTimeout
+  - DurableObjectState.getHibernatableWebSocketEventTimeout
+  - DurableObjectStorage.transaction
+  - DurableObjectStorage.transactionSync
+  - DurableObjectStorage.kv
+  - DurableObjectStorage.getCurrentBookmark
+  - DurableObjectStorage.getBookmarkForTime
+  - DurableObjectStorage.onNextSessionRestoreBookmark
+  - SqlStorage.Cursor
+  - SqlStorage.Statement
+  - SqlStorageCursor.next
+  - SqlStorageCursor.raw
+  - "SqlStorageCursor.[Symbol.iterator]"

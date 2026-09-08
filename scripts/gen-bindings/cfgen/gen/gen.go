@@ -289,9 +289,50 @@ func (p *Package) genMethod(sb *strings.Builder, d *ir.Decl, structName string, 
 	var params []string
 	var argExprs []string
 	var argBlocks [][]string
+	// restExpr, if non-empty, is a Go slice expression (the rest parameter
+	// itself, or a built []any) spread as the final jsrt.Call argument via
+	// "restExpr...". Set by the ir.Param.Rest case below; per
+	// tmp/06-codegen-spec.md 4.1, a rest parameter (always last, per JS/TS
+	// syntax) becomes a Go variadic parameter instead of a single []T one.
+	var restExpr string
 	for i, prm := range m.Params {
 		if i == dropIdx {
 			argExprs = append(argExprs, dropExpr)
+			continue
+		}
+		if prm.Rest {
+			pname := goParamName(prm.Name)
+			elemType := prm.Type
+			if elemType != nil && elemType.K == "array" {
+				elemType = elemType.Elem
+			}
+			elemConv, err := p.convForParam(elemType, "")
+			if err != nil {
+				return err
+			}
+			if elemConv.GoType == "js.Value" {
+				// An element that itself maps to a raw js.Value (e.g. the
+				// bindings ...any of SqlStorage.exec) is instead given the
+				// Go type any: jsrt.Call already takes ...any, so the
+				// variadic parameter spreads straight through with no
+				// per-element conversion, and callers can pass plain Go
+				// values (js.ValueOf handles those) instead of having to
+				// wrap each one as a js.Value themselves.
+				params = append(params, pname+" ...any")
+				restExpr = pname
+				continue
+			}
+			params = append(params, pname+" ..."+elemConv.GoType)
+			argVar := fmt.Sprintf("arg%d", i)
+			pre, expr := elemConv.ToJS("e")
+			block := []string{
+				argVar + " := make([]any, len(" + pname + "))",
+				"for i, e := range " + pname + " {",
+			}
+			block = append(block, indentAll(pre)...)
+			block = append(block, "\t"+argVar+"[i] = "+expr, "}")
+			argBlocks = append(argBlocks, block)
+			restExpr = argVar
 			continue
 		}
 		pname := goParamName(prm.Name)
@@ -340,7 +381,20 @@ func (p *Package) genMethod(sb *strings.Builder, d *ir.Decl, structName string, 
 	docComment(sb, m.Doc, goName)
 
 	callArgs := "x.v, " + fmt.Sprintf("%q", m.Name)
-	if len(argExprs) > 0 {
+	switch {
+	case restExpr != "" && len(argExprs) > 0:
+		// jsrt.Call(v, method, args ...any) has exactly one variadic
+		// parameter, and Go doesn't allow mixing individually-listed
+		// arguments with a trailing spread for the same variadic parameter
+		// (e.g. "f(x, y, s...)" is invalid when x/y would otherwise need to
+		// land in the same ...T as s) — so when a rest parameter's own Go
+		// method also has ordinary leading parameters (e.g.
+		// SqlStorage.Exec(query string, bindings ...any)), fold them into
+		// one []any ahead of the rest slice instead.
+		callArgs += ", append([]any{" + strings.Join(argExprs, ", ") + "}, " + restExpr + "...)..."
+	case restExpr != "":
+		callArgs += ", " + restExpr + "..."
+	case len(argExprs) > 0:
 		callArgs += ", " + strings.Join(argExprs, ", ")
 	}
 

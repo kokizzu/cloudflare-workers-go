@@ -161,13 +161,36 @@ func (o *Overrides) Validate(doc *ir.IR) error {
 			seen[e.Index] = true
 		}
 	}
+	// handwritten:/exclude: entries are only ever "Decl" or "Decl.member"
+	// (never the deeper "Decl.method.param"/"Decl.method.params.<name>"
+	// shapes rename:/types: support), so — unlike checkDeclMember above —
+	// split on the first "." only. This matters for a member name that
+	// itself contains a literal "." (e.g. SqlStorageCursor's computed
+	// property name "[Symbol.iterator]"): checkDeclMember's unbounded split
+	// would otherwise cut it into ["SqlStorageCursor", "[Symbol",
+	// "iterator]"] and misread it as a 3-part "Decl.method.param" key.
+	checkDeclOrMember := func(key string) error {
+		parts := strings.SplitN(key, ".", 2)
+		declName := parts[0]
+		d, ok := included[declName]
+		if !ok {
+			return fmt.Errorf("%s: %q refers to declaration %q which is not in include", o.Path, key, declName)
+		}
+		if len(parts) == 1 {
+			return nil
+		}
+		if !declHasMember(declByName, d, parts[1]) {
+			return fmt.Errorf("%s: %q refers to member %q which does not exist on %q", o.Path, key, parts[1], declName)
+		}
+		return nil
+	}
 	for _, k := range o.Handwritten {
-		if err := checkDeclMember(k); err != nil {
+		if err := checkDeclOrMember(k); err != nil {
 			return err
 		}
 	}
 	for _, k := range o.Exclude {
-		if err := checkDeclMember(k); err != nil {
+		if err := checkDeclOrMember(k); err != nil {
 			return err
 		}
 	}
