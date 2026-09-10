@@ -65,16 +65,58 @@ func TestResponseWriter_ToJSResponse_WithoutWebSocket(t *testing.T) {
 	}
 }
 
+// closeTrackingReadCloser wraps an io.ReadCloser and records whether Close
+// was called.
+type closeTrackingReadCloser struct {
+	io.ReadCloser
+	closed bool
+}
+
+func (c *closeTrackingReadCloser) Close() error {
+	c.closed = true
+	return c.ReadCloser.Close()
+}
+
+// TestResponseWriter_ToJSResponse_NoContentClosesBody verifies that a
+// bodyless response status (e.g. 204 No Content, which newJSResponse sends
+// with a null body) still closes w.Reader, since that's the only thing that
+// ever signals the caller (e.g. ServeRequest's onBodyClosed, wired up to
+// close workers.Done() in handler_js.go) that the response is fully done.
+// Without this, a handler that responds with WriteHeader(204) (and never
+// otherwise closes the body) would hang workers.Serve forever.
+func TestResponseWriter_ToJSResponse_NoContentClosesBody(t *testing.T) {
+	reader, writer := io.Pipe()
+	tracked := &closeTrackingReadCloser{ReadCloser: reader}
+	w := &ResponseWriter{
+		HeaderValue: http.Header{},
+		StatusCode:  http.StatusNoContent,
+		Reader:      tracked,
+		Writer:      writer,
+		ReadyCh:     make(chan struct{}),
+	}
+	go func() {
+		defer w.Ready()
+		defer writer.Close()
+	}()
+	<-w.ReadyCh
+
+	w.ToJSResponse()
+	if !tracked.closed {
+		t.Errorf("Reader was not closed for a %d response", http.StatusNoContent)
+	}
+}
+
 // TestResponseWriter_ToJSResponse_WithWebSocket verifies that calling
 // SetWebSocket forces status 101 and attaches the given js.Value as
 // ResponseInit.webSocket, regardless of what WriteHeader set StatusCode to.
 func TestResponseWriter_ToJSResponse_WithWebSocket(t *testing.T) {
 	withLenientResponseClass(t)
 	reader, writer := io.Pipe()
+	tracked := &closeTrackingReadCloser{ReadCloser: reader}
 	w := &ResponseWriter{
 		HeaderValue: http.Header{},
 		StatusCode:  http.StatusOK,
-		Reader:      reader,
+		Reader:      tracked,
 		Writer:      writer,
 		ReadyCh:     make(chan struct{}),
 	}
@@ -96,5 +138,8 @@ func TestResponseWriter_ToJSResponse_WithWebSocket(t *testing.T) {
 	}
 	if got := resp.Get("body"); !got.IsNull() {
 		t.Errorf("body = %v, want null", got)
+	}
+	if tracked.closed {
+		t.Errorf("Reader was closed for a WebSocket response, want left open so onBodyClosed doesn't fire before the handler's goroutines (e.g. an echo loop) run")
 	}
 }

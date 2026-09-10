@@ -2,7 +2,9 @@ package jshttp
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sync"
 	"syscall/js"
@@ -61,8 +63,49 @@ func ServeRequest(handler http.Handler, reqObj js.Value, onBodyClosed func()) (j
 		ReadyCh:     make(chan struct{}),
 	}
 	go func() {
-		defer w.Ready()
-		defer writer.Close()
+		// An unrecovered panic here would crash the whole wasm program: for
+		// handler_js.go's top-level handler that kills just the one
+		// request, but for durableobjects/host.go's handleFetch (which
+		// passes onBodyClosed == nil because the same Go instance keeps
+		// serving that Durable Object's future fetch/alarm/webSocket*
+		// triggers for its whole lifetime) it would permanently take that
+		// Durable Object instance down. Recovering keeps a handler bug
+		// scoped to this one request.
+		//
+		// This replaces the plain "defer w.Ready(); defer writer.Close()"
+		// pair: on the non-panic path it still runs writer.Close() before
+		// w.Ready(), in that order, exactly as before.
+		defer func() {
+			r := recover()
+			if r == nil {
+				writer.Close()
+				w.Ready()
+				return
+			}
+			err := fmt.Errorf("panic: %v", r)
+			log.Printf("jshttp: recovered panic in ServeHTTP: %v", r)
+			select {
+			case <-w.ReadyCh:
+				// Headers/body already committed to the JS side (Write or
+				// WriteHeader ran, or Ready() already fired some other
+				// way); too late to change the status, so just tear down
+				// the stream below.
+			default:
+				// Nothing written yet: report the panic as a fresh 500,
+				// the way a handler that itself called http.Error(w, ...,
+				// 500) would have.
+				w.HeaderValue = http.Header{}
+				w.StatusCode = http.StatusInternalServerError
+			}
+			// CloseWithError (rather than a clean Close) makes the JS-side
+			// ReadableStream observe an error/abort instead of looking
+			// like a normal, truncated-but-successful stream — see
+			// jsutil.readerToReadableStream.Pull, which calls
+			// controller.error(...) when the underlying Read returns a
+			// non-EOF error.
+			writer.CloseWithError(err)
+			w.Ready()
+		}()
 		handler.ServeHTTP(w, req)
 	}()
 	<-w.ReadyCh

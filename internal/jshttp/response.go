@@ -59,6 +59,20 @@ func newJSResponse(statusCode int, headers http.Header, contentLength int64, bod
 		status == http.StatusNoContent ||
 		status == http.StatusResetContent ||
 		status == http.StatusNotModified {
+		// For a WebSocket upgrade, body is intentionally left open: it wraps
+		// the *bodyCloser ServeRequest hands to ResponseWriter, whose Close
+		// (via onBodyClosed) signals the top-level handler's response body
+		// is fully consumed so the Go program may exit (see serve.go /
+		// handler_js.go). Closing it here would fire that signal
+		// immediately and tear down the goroutines a WebSocket handler just
+		// started (e.g. an echo loop) before they get to run. For the
+		// other bodyless statuses there is no such handler still in
+		// flight, so close body here — otherwise nothing else ever will,
+		// and onBodyClosed (and anything blocked on it, like Serve) never
+		// fires for these responses.
+		if webSocket == nil && body != nil {
+			body.Close()
+		}
 		return jsutil.ResponseClass.New(jsutil.Null, respInit)
 	}
 	readableStream := func() js.Value {

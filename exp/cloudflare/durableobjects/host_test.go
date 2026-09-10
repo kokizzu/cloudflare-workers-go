@@ -15,11 +15,11 @@ import (
 )
 
 // resetInstance clears every package-level Register/instance state (the
-// registered Constructor map, and the sync.Once-guarded instance/state/err
-// this package memoizes per wasm instance) around a test, so tests don't
-// leak into each other — in production, all of this state is scoped to one
-// wasm instance's lifetime (see the package doc comment), but a `go test`
-// binary keeps running across many "instances" worth of test cases.
+// registered Constructor map, and the mutex-guarded instance/state this
+// package memoizes per wasm instance) around a test, so tests don't leak
+// into each other — in production, all of this state is scoped to one wasm
+// instance's lifetime (see the package doc comment), but a `go test` binary
+// keeps running across many "instances" worth of test cases.
 func resetInstance(t *testing.T) {
 	t.Helper()
 	constructorsMu.Lock()
@@ -27,23 +27,24 @@ func resetInstance(t *testing.T) {
 	constructors = map[string]Constructor{}
 	constructorsMu.Unlock()
 
-	prevOnce := instanceOnce
+	instanceMu.Lock()
+	prevReady := instanceReady
 	prevObj := instanceObj
-	prevErr := instanceErr
 	prevState := instanceState
-	instanceOnce = &sync.Once{}
+	instanceReady = false
 	instanceObj = nil
-	instanceErr = nil
 	instanceState = nil
+	instanceMu.Unlock()
 
 	t.Cleanup(func() {
 		constructorsMu.Lock()
 		constructors = prevConstructors
 		constructorsMu.Unlock()
-		instanceOnce = prevOnce
+		instanceMu.Lock()
+		instanceReady = prevReady
 		instanceObj = prevObj
-		instanceErr = prevErr
 		instanceState = prevState
+		instanceMu.Unlock()
 	})
 }
 
@@ -167,6 +168,41 @@ func TestHandleDurableObjectFetch_UnregisteredClassName(t *testing.T) {
 	promise := handleFetch.Invoke(fakeRequest("/"))
 	if _, err := jsrt.Await(promise); err == nil {
 		t.Fatal("handleDurableObjectFetch resolved for an unregistered class name, want a rejection")
+	}
+}
+
+// TestHandleDurableObjectFetch_RetriesConstructorAfterError verifies that a
+// Constructor error is not cached: the next trigger delivered to the same
+// wasm instance retries construction from scratch instead of failing
+// forever (see Constructor's doc comment on why a failed attempt isn't
+// memoized).
+func TestHandleDurableObjectFetch_RetriesConstructorAfterError(t *testing.T) {
+	resetInstance(t)
+	withRuntimeContext(t, "Counter", js.ValueOf(map[string]any{}), js.ValueOf(map[string]any{}))
+
+	var attempts int
+	Register("Counter", func(state *DurableObjectState, env js.Value) (Object, error) {
+		attempts++
+		if attempts == 1 {
+			return nil, fmt.Errorf("transient failure")
+		}
+		return &countingObject{id: attempts}, nil
+	})
+
+	handleFetch := jsutil.Binding.Get("handleDurableObjectFetch")
+	if _, err := jsrt.Await(handleFetch.Invoke(fakeRequest("/"))); err == nil {
+		t.Fatal("handleDurableObjectFetch (1st call) resolved, want a rejection from the failing Constructor")
+	}
+	resp, err := jsrt.Await(handleFetch.Invoke(fakeRequest("/")))
+	if err != nil {
+		t.Fatalf("handleDurableObjectFetch (2nd call) rejected: %v, want the retried Constructor to succeed", err)
+	}
+
+	if attempts != 2 {
+		t.Fatalf("Constructor called %d times, want 2 (1 failure + 1 retry)", attempts)
+	}
+	if got, want := bodyText(t, resp), "id=2 requests=1"; got != want {
+		t.Errorf("response body = %q, want %q", got, want)
 	}
 }
 

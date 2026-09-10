@@ -15,6 +15,18 @@ func RegisterAsyncHandler(name string, maxArgs int, handler func(args []js.Value
 			resolve := pArgs[0]
 			reject := pArgs[1]
 			go func() {
+				// A panic that escapes handler must not be allowed to
+				// propagate out of this goroutine: an unrecovered panic
+				// terminates the whole wasm program without ever calling
+				// resolve/reject, leaving the JS side's Promise pending
+				// forever instead of surfacing the failure. Converting it
+				// into a rejection keeps the Promise contract intact and
+				// lets the JS caller observe the error.
+				defer func() {
+					if r := recover(); r != nil {
+						reject.Invoke(Errorf("panic in %s handler: %v", name, r))
+					}
+				}()
 				if len(args) > maxArgs {
 					reject.Invoke(Errorf("too many args given to %s: %d", name, len(args)))
 					return
@@ -55,6 +67,14 @@ func AsyncFunc(handler func(args []js.Value) (js.Value, error)) js.Func {
 			resolve := pArgs[0]
 			reject := pArgs[1]
 			go func() {
+				// See the matching comment in RegisterAsyncHandler: without
+				// this, a panic in handler would crash the wasm program
+				// instead of rejecting the Promise.
+				defer func() {
+					if r := recover(); r != nil {
+						reject.Invoke(Errorf("panic in async handler: %v", r))
+					}
+				}()
 				result, err := handler(args)
 				if err != nil {
 					reject.Invoke(Error(err.Error()))

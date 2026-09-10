@@ -185,6 +185,18 @@ func ConvertReaderToReadableStream(reader io.Reader) js.Value {
 			reject := pArgs[1]
 			controller := args[0]
 			go func() {
+				// A panic that escapes stream.Pull must not be allowed to
+				// propagate out of this goroutine: an unrecovered panic
+				// terminates the whole wasm program without ever calling
+				// resolve/reject, leaving the JS side's Promise pending
+				// forever instead of surfacing the failure. Converting it
+				// into a rejection keeps the Promise contract intact and
+				// lets the JS caller observe the error.
+				defer func() {
+					if r := recover(); r != nil {
+						reject.Invoke(Errorf("panic in ReadableStream pull: %v", r))
+					}
+				}()
 				err := stream.Pull(controller)
 				if err != nil {
 					reject.Invoke(Error(err.Error()))
@@ -203,6 +215,14 @@ func ConvertReaderToReadableStream(reader io.Reader) js.Value {
 			resolve := pArgs[0]
 			reject := pArgs[1]
 			go func() {
+				// See the matching comment in pull's executor above: without
+				// this, a panic in stream.Cancel would crash the wasm
+				// program instead of rejecting the Promise.
+				defer func() {
+					if r := recover(); r != nil {
+						reject.Invoke(Errorf("panic in ReadableStream cancel: %v", r))
+					}
+				}()
 				err := stream.Cancel()
 				if err != nil {
 					reject.Invoke(Error(err.Error()))

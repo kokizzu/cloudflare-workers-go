@@ -56,10 +56,17 @@ type WebSocketErrorHandler interface {
 }
 
 // Constructor builds an Object for one Durable Object instance, given its
-// DurableObjectState (ctx) and environment bindings (env). It is called at
-// most once per wasm instance (i.e. once per Durable Object instance's
-// lifetime; see the package doc comment on the 1-instance-per-object model),
-// the first time any trigger reaches this instance.
+// DurableObjectState (ctx) and environment bindings (env). It runs the
+// first time any trigger reaches this wasm instance; if it returns a
+// non-nil error, it is retried from scratch on the next trigger (a
+// Constructor failure is often transient — e.g. a binding or storage read
+// racing instance startup — and a Durable Object's wasm instance otherwise
+// stays alive indefinitely, so caching the failure would turn one bad
+// attempt into a permanent outage for that object id). Once it returns
+// successfully, the result is memoized for the rest of the wasm instance's
+// lifetime (i.e. every subsequent trigger delivered to the same Durable
+// Object instance reuses it) and Constructor is not called again — see
+// instance()'s doc comment.
 type Constructor func(state *DurableObjectState, env js.Value) (Object, error)
 
 var (
@@ -82,13 +89,19 @@ func Register(className string, ctor Constructor) {
 	constructors[className] = ctor
 }
 
-// instanceOnce is a *sync.Once (rather than a sync.Once value) so that
-// host_test.go can reset instance state between test cases by swapping the
-// pointer instead of copying a sync.Once (which go vet's copylocks check
-// rightly flags).
+// instanceMu guards instanceObj/instanceState/instanceReady below.
+//
+// Construction is memoized only on success (instanceReady), not with a
+// sync.Once: a Constructor error (e.g. a binding that isn't ready yet, or
+// some other transient failure) is deliberately not cached, so the next
+// trigger delivered to this wasm instance retries the Constructor instead of
+// failing forever. A Durable Object instance's wasm instance can stay alive
+// for a long time (see the package doc comment), so permanently wedging it
+// after one failed construction would otherwise require the runtime to evict
+// and recreate the whole instance to recover.
 var (
-	instanceOnce  = &sync.Once{}
-	instanceErr   error
+	instanceMu    sync.Mutex
+	instanceReady bool
 	instanceObj   Object
 	instanceState *DurableObjectState
 )
@@ -103,36 +116,44 @@ func State() *DurableObjectState {
 
 // instance returns this wasm instance's Object, constructing it (via the
 // Constructor registered for the runtime context's "durableObject.className")
-// exactly once — every subsequent trigger delivered to the same instance
-// (fetch, alarm, webSocket*) reuses the same Object and DurableObjectState.
+// on the first successful call — every subsequent trigger delivered to the
+// same instance (fetch, alarm, webSocket*) reuses that same Object and
+// DurableObjectState. A Constructor error is not cached: it is returned to
+// this call's caller, and the next trigger tries construction again (see the
+// instanceMu doc comment).
 func instance() (Object, error) {
-	instanceOnce.Do(func() {
-		className, err := currentClassName()
-		if err != nil {
-			instanceErr = err
-			return
-		}
-		constructorsMu.Lock()
-		ctor, ok := constructors[className]
-		constructorsMu.Unlock()
-		if !ok {
-			instanceErr = fmt.Errorf("durableobjects: no Constructor registered for class %q; call durableobjects.Register before workers.Serve", className)
-			return
-		}
-		ctxVal, err := jsrt.RuntimeContextValue("ctx")
-		if err != nil {
-			instanceErr = fmt.Errorf("durableobjects: %w", err)
-			return
-		}
-		envVal, err := jsrt.RuntimeContextValue("env")
-		if err != nil {
-			instanceErr = fmt.Errorf("durableobjects: %w", err)
-			return
-		}
-		instanceState = DurableObjectStateFromJS(ctxVal)
-		instanceObj, instanceErr = ctor(instanceState, envVal)
-	})
-	return instanceObj, instanceErr
+	instanceMu.Lock()
+	defer instanceMu.Unlock()
+	if instanceReady {
+		return instanceObj, nil
+	}
+	className, err := currentClassName()
+	if err != nil {
+		return nil, err
+	}
+	constructorsMu.Lock()
+	ctor, ok := constructors[className]
+	constructorsMu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("durableobjects: no Constructor registered for class %q; call durableobjects.Register before workers.Serve", className)
+	}
+	ctxVal, err := jsrt.RuntimeContextValue("ctx")
+	if err != nil {
+		return nil, fmt.Errorf("durableobjects: %w", err)
+	}
+	envVal, err := jsrt.RuntimeContextValue("env")
+	if err != nil {
+		return nil, fmt.Errorf("durableobjects: %w", err)
+	}
+	state := DurableObjectStateFromJS(ctxVal)
+	obj, err := ctor(state, envVal)
+	if err != nil {
+		return nil, err
+	}
+	instanceState = state
+	instanceObj = obj
+	instanceReady = true
+	return instanceObj, nil
 }
 
 // currentClassName reads durableObject.className off the runtime context —
