@@ -101,7 +101,7 @@ type IncomingRequestCFProperties struct {
 	// The country code `"T1"` is used for requests originating on TOR.
 	//
 	// @example "GB"
-	Country js.Value `js:"country"`
+	Country string `js:"country"`
 	// If present, this property indicates that the request originated in the EU
 	//
 	// @example "1"
@@ -109,7 +109,7 @@ type IncomingRequestCFProperties struct {
 	// A two-letter code indicating the continent the request originated from.
 	//
 	// @example "AN"
-	Continent js.Value `js:"continent"`
+	Continent ContinentCode `js:"continent"`
 	// The city the request originated from
 	//
 	// @example "Austin"
@@ -223,7 +223,7 @@ func incomingRequestCFPropertiesFromJS(v js.Value) (IncomingRequestCFProperties,
 	}
 	{
 		if s := v.Get("country"); !s.IsUndefined() && !s.IsNull() {
-			out.Country = s
+			out.Country = s.String()
 		}
 	}
 	{
@@ -233,7 +233,7 @@ func incomingRequestCFPropertiesFromJS(v js.Value) (IncomingRequestCFProperties,
 	}
 	{
 		if s := v.Get("continent"); !s.IsUndefined() && !s.IsNull() {
-			out.Continent = s
+			out.Continent = ContinentCode(s.String())
 		}
 	}
 	{
@@ -326,14 +326,14 @@ func (o IncomingRequestCFProperties) toJS() js.Value {
 	if !jsrt.IsNil(o.HostMetadata) {
 		obj.Set("hostMetadata", o.HostMetadata)
 	}
-	if !jsrt.IsNil(o.Country) {
+	if o.Country != "" {
 		obj.Set("country", o.Country)
 	}
 	if o.IsEUCountry != "" {
 		obj.Set("isEUCountry", o.IsEUCountry)
 	}
-	if !jsrt.IsNil(o.Continent) {
-		obj.Set("continent", o.Continent)
+	if o.Continent != "" {
+		obj.Set("continent", string(o.Continent))
 	}
 	if o.City != "" {
 		obj.Set("city", o.City)
@@ -620,7 +620,7 @@ func (o IncomingRequestCFPropertiesBotManagementBase) toJS() js.Value {
 // IncomingRequestCFPropertiesBotManagementEnterprise
 type IncomingRequestCFPropertiesBotManagementEnterprise struct {
 	// Results of Cloudflare's Bot Management analysis
-	BotManagement js.Value `js:"botManagement"`
+	BotManagement IncomingRequestCFPropertiesBotManagementEnterpriseBotManagement `js:"botManagement"`
 	// Duplicate of `botManagement.score`.
 	//
 	// @deprecated
@@ -630,7 +630,11 @@ type IncomingRequestCFPropertiesBotManagementEnterprise struct {
 func incomingRequestCFPropertiesBotManagementEnterpriseFromJS(v js.Value) (IncomingRequestCFPropertiesBotManagementEnterprise, error) {
 	var out IncomingRequestCFPropertiesBotManagementEnterprise
 	{
-		out.BotManagement = v.Get("botManagement")
+		if tmp, err := incomingRequestCFPropertiesBotManagementEnterpriseBotManagementFromJS(v.Get("botManagement")); err != nil {
+			return IncomingRequestCFPropertiesBotManagementEnterprise{}, err
+		} else {
+			out.BotManagement = tmp
+		}
 	}
 	{
 		out.ClientTrustScore = v.Get("clientTrustScore").Float()
@@ -640,8 +644,8 @@ func incomingRequestCFPropertiesBotManagementEnterpriseFromJS(v js.Value) (Incom
 
 func (o IncomingRequestCFPropertiesBotManagementEnterprise) toJS() js.Value {
 	obj := jsrt.NewObject()
-	if !jsrt.IsNil(o.BotManagement) {
-		obj.Set("botManagement", o.BotManagement)
+	if true {
+		obj.Set("botManagement", o.BotManagement.toJS())
 	}
 	if o.ClientTrustScore != 0 {
 		obj.Set("clientTrustScore", o.ClientTrustScore)
@@ -656,7 +660,7 @@ type IncomingRequestCFPropertiesTLSClientAuth struct {
 	// Result of certificate verification.
 	//
 	// @example "FAILED:self signed certificate"
-	CertVerified js.Value `js:"certVerified"`
+	CertVerified string `js:"certVerified"`
 	// The presented certificate's revokation status.
 	//
 	// - A value of `"1"` indicates the certificate has been revoked
@@ -740,7 +744,7 @@ func incomingRequestCFPropertiesTLSClientAuthFromJS(v js.Value) (IncomingRequest
 		out.CertPresented = v.Get("certPresented").String()
 	}
 	{
-		out.CertVerified = v.Get("certVerified")
+		out.CertVerified = v.Get("certVerified").String()
 	}
 	{
 		out.CertRevoked = v.Get("certRevoked").String()
@@ -807,7 +811,7 @@ func (o IncomingRequestCFPropertiesTLSClientAuth) toJS() js.Value {
 	if o.CertPresented != "" {
 		obj.Set("certPresented", o.CertPresented)
 	}
-	if !jsrt.IsNil(o.CertVerified) {
+	if o.CertVerified != "" {
 		obj.Set("certVerified", o.CertVerified)
 	}
 	if o.CertRevoked != "" {
@@ -1042,7 +1046,7 @@ type IncomingRequestCFPropertiesGeographicInformation struct {
 	// The country code `"T1"` is used for requests originating on TOR.
 	//
 	// @example "GB"
-	Country js.Value `js:"country"`
+	Country string `js:"country"`
 	// If present, this property indicates that the request originated in the EU
 	//
 	// @example "1"
@@ -1050,7 +1054,7 @@ type IncomingRequestCFPropertiesGeographicInformation struct {
 	// A two-letter code indicating the continent the request originated from.
 	//
 	// @example "AN"
-	Continent js.Value `js:"continent"`
+	Continent ContinentCode `js:"continent"`
 	// The city the request originated from
 	//
 	// @example "Austin"
@@ -1091,7 +1095,7 @@ func incomingRequestCFPropertiesGeographicInformationFromJS(v js.Value) (Incomin
 	var out IncomingRequestCFPropertiesGeographicInformation
 	{
 		if s := v.Get("country"); !s.IsUndefined() && !s.IsNull() {
-			out.Country = s
+			out.Country = s.String()
 		}
 	}
 	{
@@ -1101,7 +1105,7 @@ func incomingRequestCFPropertiesGeographicInformationFromJS(v js.Value) (Incomin
 	}
 	{
 		if s := v.Get("continent"); !s.IsUndefined() && !s.IsNull() {
-			out.Continent = s
+			out.Continent = ContinentCode(s.String())
 		}
 	}
 	{
@@ -1149,14 +1153,14 @@ func incomingRequestCFPropertiesGeographicInformationFromJS(v js.Value) (Incomin
 
 func (o IncomingRequestCFPropertiesGeographicInformation) toJS() js.Value {
 	obj := jsrt.NewObject()
-	if !jsrt.IsNil(o.Country) {
+	if o.Country != "" {
 		obj.Set("country", o.Country)
 	}
 	if o.IsEUCountry != "" {
 		obj.Set("isEUCountry", o.IsEUCountry)
 	}
-	if !jsrt.IsNil(o.Continent) {
-		obj.Set("continent", o.Continent)
+	if o.Continent != "" {
+		obj.Set("continent", string(o.Continent))
 	}
 	if o.City != "" {
 		obj.Set("city", o.City)
@@ -1301,3 +1305,91 @@ func (o IncomingRequestCFPropertiesExportedAuthenticatorMetadata) toJS() js.Valu
 
 // IncomingRequestCFPropertiesEdgeRequestKeepAliveStatus An upstream endpoint's response to a TCP `keepalive` message from Cloudflare.
 type IncomingRequestCFPropertiesEdgeRequestKeepAliveStatus = int
+
+// ContinentCode The 2-letter continent codes Cloudflare uses
+type ContinentCode string
+
+const (
+	ContinentCodeAF ContinentCode = "AF"
+	ContinentCodeAN ContinentCode = "AN"
+	ContinentCodeAS ContinentCode = "AS"
+	ContinentCodeEU ContinentCode = "EU"
+	ContinentCodeNA ContinentCode = "NA"
+	ContinentCodeOC ContinentCode = "OC"
+	ContinentCodeSA ContinentCode = "SA"
+)
+
+// IncomingRequestCFPropertiesBotManagementEnterpriseBotManagement
+type IncomingRequestCFPropertiesBotManagementEnterpriseBotManagement struct {
+	// Cloudflare’s [level of certainty](https://developers.cloudflare.com/bots/concepts/bot-score/) that a request comes from a bot,
+	// represented as an integer percentage between `1` (almost certainly a bot) and `99` (almost certainly human).
+	//
+	// @example 54
+	Score float64 `js:"score"`
+	// A boolean value that is true if the request comes from a good bot, like Google or Bing.
+	// Most customers choose to allow this traffic. For more details, see [Traffic from known bots](https://developers.cloudflare.com/firewall/known-issues-and-faq/#how-does-firewall-rules-handle-traffic-from-known-bots).
+	VerifiedBot bool `js:"verifiedBot"`
+	// A boolean value that is true if the request originates from a
+	// Cloudflare-verified proxy service.
+	CorporateProxy bool `js:"corporateProxy"`
+	// A boolean value that's true if the request matches [file extensions](https://developers.cloudflare.com/bots/reference/static-resources/) for many types of static resources.
+	StaticResource bool `js:"staticResource"`
+	// List of IDs that correlate to the Bot Management heuristic detections made on a request (you can have multiple heuristic detections on the same request).
+	DetectionIds []float64 `js:"detectionIds"`
+	// A [JA3 Fingerprint](https://developers.cloudflare.com/bots/concepts/ja3-fingerprint/) to help profile specific SSL/TLS clients
+	// across different destination IPs, Ports, and X509 certificates.
+	JA3Hash string `js:"ja3Hash"`
+}
+
+func incomingRequestCFPropertiesBotManagementEnterpriseBotManagementFromJS(v js.Value) (IncomingRequestCFPropertiesBotManagementEnterpriseBotManagement, error) {
+	var out IncomingRequestCFPropertiesBotManagementEnterpriseBotManagement
+	{
+		out.Score = v.Get("score").Float()
+	}
+	{
+		out.VerifiedBot = v.Get("verifiedBot").Bool()
+	}
+	{
+		out.CorporateProxy = v.Get("corporateProxy").Bool()
+	}
+	{
+		out.StaticResource = v.Get("staticResource").Bool()
+	}
+	{
+		out.DetectionIds = make([]float64, v.Get("detectionIds").Length())
+		for i := range out.DetectionIds {
+			out.DetectionIds[i] = v.Get("detectionIds").Index(i).Float()
+		}
+	}
+	{
+		out.JA3Hash = v.Get("ja3Hash").String()
+	}
+	return out, nil
+}
+
+func (o IncomingRequestCFPropertiesBotManagementEnterpriseBotManagement) toJS() js.Value {
+	obj := jsrt.NewObject()
+	if o.Score != 0 {
+		obj.Set("score", o.Score)
+	}
+	if o.VerifiedBot {
+		obj.Set("verifiedBot", o.VerifiedBot)
+	}
+	if o.CorporateProxy {
+		obj.Set("corporateProxy", o.CorporateProxy)
+	}
+	if o.StaticResource {
+		obj.Set("staticResource", o.StaticResource)
+	}
+	if len(o.DetectionIds) > 0 {
+		arr := js.Global().Get("Array").New(len(o.DetectionIds))
+		for i, e := range o.DetectionIds {
+			arr.SetIndex(i, e)
+		}
+		obj.Set("detectionIds", arr)
+	}
+	if o.JA3Hash != "" {
+		obj.Set("ja3Hash", o.JA3Hash)
+	}
+	return obj
+}

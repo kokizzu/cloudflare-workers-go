@@ -54,8 +54,8 @@ func TestFromJS(t *testing.T) {
 	if got := props.HostMetadata.String(); got != "custom-metadata" {
 		t.Errorf("props.HostMetadata = %q, want %q", got, "custom-metadata")
 	}
-	if got := props.Country.String(); got != "US" {
-		t.Errorf("props.Country = %q, want %q", got, "US")
+	if props.Country != "US" {
+		t.Errorf("props.Country = %q, want %q", props.Country, "US")
 	}
 }
 

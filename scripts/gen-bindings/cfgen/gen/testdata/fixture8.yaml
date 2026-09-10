@@ -1,0 +1,15 @@
+package: txstore
+doc: |
+  Package txstore is an eighth synthetic fixture package, covering the
+  tmp/06-codegen-spec.md 5.1 item 5 cfgen extension: a method whose only
+  parameter is a callback of shape "(a: A) => Promise<U>" or
+  "() => Promise<U>" gets a dedicated Go signature (func(*A) (U, error) or
+  func() (U, error), collapsing to just "error" when U is void), wrapping
+  the Go closure as a JS function via jsrt.AsyncFunc.
+include:
+  - Txn
+  - Store
+bindings:
+  - Store
+typeParams:
+  Store.T: js.Value

@@ -40,7 +40,7 @@
         {
           "kind": "method",
           "name": "get",
-          "doc": "overload 2, configured as GetEncoded, exercising a method-level typeParam default (Encoding has no default -> js.Value) and dropping the literal \"encoded\" kind param",
+          "doc": "overload 2, configured as GetEncoded, exercising a method-level typeParam override (Encoding has no default, overridden to string via typeParams:) and dropping the literal \"encoded\" kind param",
           "params": [
             { "name": "key", "type": { "k": "typeParam", "name": "Item" }, "optional": false, "rest": false },
             { "name": "kind", "type": { "k": "literal", "value": "encoded" }, "optional": false, "rest": false }

@@ -81,6 +81,9 @@ func TestValidateRejectsUnknownNames(t *testing.T) {
 		{"unknown handwritten target", Overrides{Package: "x", Include: []string{"Widget"}, Handwritten: []string{"Widget.nope"}}},
 		{"unknown exclude target", Overrides{Package: "x", Include: []string{"Widget"}, Exclude: []string{"Widget.nope"}}},
 		{"binding not in include", Overrides{Package: "x", Include: []string{"WidgetInfo"}, Bindings: []string{"Widget"}}},
+		{"typeParams key not Decl.Param shape", Overrides{Package: "x", Include: []string{"Widget"}, TypeParams: map[string]string{"Widget": "js.Value"}}},
+		{"typeParams decl not in include", Overrides{Package: "x", Include: []string{"WidgetInfo"}, TypeParams: map[string]string{"Widget.T": "js.Value"}}},
+		{"typeParams param not declared", Overrides{Package: "x", Include: []string{"Widget"}, TypeParams: map[string]string{"Widget.NotAParam": "js.Value"}}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -153,10 +156,9 @@ func TestGenerateGolden2(t *testing.T) {
 	}
 	wantWarnings := []string{
 		// Encoding (Store.get's overload-2 method typeParam) has no
-		// default, so it falls back to js.Value with a warning, same as
-		// any other unresolvable typeParam (spec item 2's "no default"
-		// case).
-		`type parameter "Encoding" used outside of a supported context, falling back to js.Value`,
+		// default, so it falls back to js.Value silently — no warning,
+		// per tmp/06-codegen-spec.md 5.1 item 3 (a defaultless type
+		// parameter is expected generics erasure, not a fixable gap).
 		`Store.get: skipping overload 0 (2 params) with no overloads: entry`,
 	}
 	if !slicesEqual(wantWarnings, result.Warnings) {
@@ -181,6 +183,11 @@ func TestGenerateGolden2(t *testing.T) {
 		// (Config.altBox -> Box) triggers the same pointer treatment.
 		"AltBox *Box `js:\"altBox\"`",
 		"if o.AltBox != nil {",
+		// tmp/06-codegen-spec.md 5.1 item 3: a typeParams: override pins
+		// Store.get's overload-2 method typeParam Encoding to string
+		// (instead of the silent js.Value default), and the nullable
+		// Promise<Encoding | null> return wraps it into *string.
+		"func (x *Store) GetEncoded(key string) (*string, error) {",
 	} {
 		if !strings.Contains(src, want) {
 			t.Errorf("generated source missing %q", want)
@@ -348,11 +355,14 @@ func TestGenerateGoldenNestedContainers(t *testing.T) {
 // tmp/06-codegen-spec.md section 4.1: a Map<string, T> return value becomes
 // map[string]T (via Array.from(v.keys())/v.get(k), not Object.keys, since a
 // JS Map isn't a plain object) — both for a resolvable T (string) and for an
-// unresolved typeParam T (falling back to map[string]js.Value, with a
-// warning) — and a rest parameter becomes a Go variadic parameter: ...any
+// unresolved typeParam T (falling back to map[string]js.Value, silently per
+// 5.1 item 3) — and a rest parameter becomes a Go variadic parameter: ...any
 // (spread directly into jsrt.Call) when its element type itself maps to
 // js.Value, or ...T with an element-by-element []any conversion built ahead
-// of the call otherwise.
+// of the call otherwise. It also covers 5.1 item 6: Map<string, T | null>
+// becomes map[string]*T for a resolvable prim T (getAllOrNull) or
+// map[string]js.Value when T itself falls back to js.Value
+// (getAllRawOrNull).
 func TestGenerateGoldenMapAndRest(t *testing.T) {
 	doc := loadFixtureIR(t, filepath.Join("testdata", "fixture5.json"))
 	ov, err := LoadOverrides(filepath.Join("testdata", "fixture5.yaml"))
@@ -366,11 +376,8 @@ func TestGenerateGoldenMapAndRest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantWarnings := []string{
-		`type parameter "T" used outside of a supported context, falling back to js.Value`,
-	}
-	if !slicesEqual(wantWarnings, result.Warnings) {
-		t.Errorf("Warnings = %v, want %v", result.Warnings, wantWarnings)
+	if len(result.Warnings) != 0 {
+		t.Errorf("unexpected warnings: %v", result.Warnings)
 	}
 
 	src := string(result.Source)
@@ -399,6 +406,17 @@ func TestGenerateGoldenMapAndRest(t *testing.T) {
 		"for i, e := range values {",
 		"arg1[i] = e",
 		"jsrt.Call(x.v, \"tag\", append([]any{name}, arg1...)...)",
+		// item 6: Map<string, string | null> -> map[string]*string, with
+		// a null entry left as a nil pointer via nullableReturnConv's
+		// pointer-wrap.
+		"func (x *Registry) GetAllOrNull() (map[string]*string, error) {",
+		"var mapVal *string",
+		"if !jsrt.IsNil(r.Call(\"get\", mapKey)) {",
+		// item 6 + item 3: Map<string, T | null> with an unresolved T
+		// falls back to map[string]js.Value, untouched by
+		// nullableReturnConv (js.Value already round-trips null on its
+		// own).
+		"func (x *Registry) GetAllRawOrNull() (map[string]js.Value, error) {",
 	} {
 		if !strings.Contains(src, want) {
 			t.Errorf("generated source missing %q", want)
@@ -406,6 +424,226 @@ func TestGenerateGoldenMapAndRest(t *testing.T) {
 	}
 
 	goldenPath := filepath.Join("testdata", "fixture5.golden.go.txt")
+	if *update {
+		if err := os.WriteFile(goldenPath, result.Source, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(result.Source) != string(want) {
+		t.Errorf("generated output does not match golden file %s (run `go test ./cfgen/gen/... -update` to refresh it if the change is intentional)\n--- got ---\n%s\n--- want ---\n%s", goldenPath, result.Source, want)
+	}
+}
+
+// TestGenerateGolden6 exercises tmp/06-codegen-spec.md 5.1 items 1 and 2:
+// inline object type literals synthesized into named nested data types
+// (field, getter, method-param, and method-return position), and the union
+// default rules (string/literal mix, numeric literal union, boolean/
+// literal mix, object-literal union merge, and single-included-ref union
+// resolution, the last with an info-level note instead of a warning).
+func TestGenerateGolden6(t *testing.T) {
+	doc := loadFixtureIR(t, filepath.Join("testdata", "fixture6.json"))
+	ov, err := LoadOverrides(filepath.Join("testdata", "fixture6.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ov.Validate(doc); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Generate(doc, ov)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Warnings) != 0 {
+		t.Errorf("unexpected warnings: %v", result.Warnings)
+	}
+	wantInfos := []string{
+		`resolved union (KnownMeta | UnknownExternal) to KnownMeta, the only member declared in this package's include list.`,
+	}
+	if !slicesEqual(wantInfos, result.Infos) {
+		t.Errorf("Infos = %v, want %v", result.Infos, wantInfos)
+	}
+
+	src := string(result.Source)
+	for _, want := range []string{
+		// item 1: an inline object field is synthesized as
+		// "<parent Go type><field name>" and generated as its own data
+		// type (with fromJS/toJS), reused (not re-synthesized) by
+		// Config's struct/fromJS/toJS.
+		"type ConfigRetention struct {",
+		"Days float64 `js:\"days\"`",
+		"Retention ConfigRetention `js:\"retention\"`",
+		"func configRetentionFromJS(v js.Value) (ConfigRetention, error) {",
+		"func (o ConfigRetention) toJS() js.Value {",
+		// item 2 sub-rule "object-literal union merge": Config.range's
+		// two-branch union of object literals merges into one type, with
+		// the field only present in one branch (end) becoming optional.
+		"type ConfigRange struct {",
+		"Start float64 `js:\"start\"`",
+		"Range     ConfigRange     `js:\"range\"`",
+		// item 2 sub-rule "ref union, exactly one in-include member": both
+		// Config.meta's branches are refs, UnknownExternal is handle-
+		// shaped (so the object/union merge rule can't apply to it) and
+		// not included, so meta resolves to KnownMeta directly (no
+		// synthesized type) and the info note above is reflected on the
+		// field's doc comment.
+		"Meta    KnownMeta `js:\"meta\"`",
+		"resolved union (KnownMeta | UnknownExternal) to KnownMeta",
+		// item 2 sub-rule "numeric literal union -> float64".
+		"Level   float64   `js:\"level\"`",
+		// item 2 sub-rule "boolean/literal mix -> bool".
+		"Enabled bool      `js:\"enabled\"`",
+		// item 2 sub-rule "string/literal mix -> string".
+		"Label   string    `js:\"label\"`",
+		// item 1 at getter position: "<structName><GetterName>".
+		"type CatalogInfo struct {",
+		"func (x *Catalog) Info() CatalogInfo {",
+		// item 1 at method param position:
+		// "<structName><MethodName><ParamName>".
+		"type CatalogSearchFilter struct {",
+		"func (x *Catalog) Search(query string, filter CatalogSearchFilter) (CatalogSearch, error) {",
+		// item 1 at method return position: "<structName><MethodName>".
+		"type CatalogSearch struct {",
+		"Count float64 `js:\"count\"`",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("generated source missing %q", want)
+		}
+	}
+
+	goldenPath := filepath.Join("testdata", "fixture6.golden.go.txt")
+	if *update {
+		if err := os.WriteFile(goldenPath, result.Source, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(result.Source) != string(want) {
+		t.Errorf("generated output does not match golden file %s (run `go test ./cfgen/gen/... -update` to refresh it if the change is intentional)\n--- got ---\n%s\n--- want ---\n%s", goldenPath, result.Source, want)
+	}
+}
+
+// TestGenerateGolden8 exercises tmp/06-codegen-spec.md 5.1 item 5: a method
+// whose only parameter is a callback of shape "(a: A) => Promise<U>" or
+// "() => Promise<U>" gets a dedicated Go signature instead of falling back
+// to js.Value for the unsupported function type, wrapping the Go closure
+// via jsrt.AsyncFunc.
+func TestGenerateGolden8(t *testing.T) {
+	doc := loadFixtureIR(t, filepath.Join("testdata", "fixture8.json"))
+	ov, err := LoadOverrides(filepath.Join("testdata", "fixture8.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ov.Validate(doc); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Generate(doc, ov)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Warnings) != 0 {
+		t.Errorf("unexpected warnings: %v", result.Warnings)
+	}
+
+	src := string(result.Source)
+	for _, want := range []string{
+		// transaction: "(txn: Txn) => Promise<T>" -> func(*Txn) (js.Value, error)
+		// (T has no default, overridden to js.Value for documentation).
+		"func (x *Store) Transaction(closure func(*Txn) (js.Value, error)) (js.Value, error) {",
+		"cb := jsrt.AsyncFunc(func(cbArgs []js.Value) (js.Value, error) {",
+		"var a0 *Txn",
+		"a0 = TxnFromJS(cbArgs[0])",
+		"result, err := closure(a0)",
+		"defer cb.Release()",
+		"p, err := jsrt.Call(x.v, \"transaction\", cb)",
+		// blockConcurrencyWhile: "() => Promise<T>" -> func() (js.Value, error).
+		"func (x *Store) BlockConcurrencyWhile(callback func() (js.Value, error)) (js.Value, error) {",
+		"result, err := callback()",
+		// runVoid: "() => Promise<void>" -> func() error, and the outer
+		// method (also void) becomes just "error".
+		"func (x *Store) RunVoid(callback func() error) error {",
+		"err := callback()",
+		"return js.Undefined(), nil",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("generated source missing %q", want)
+		}
+	}
+
+	goldenPath := filepath.Join("testdata", "fixture8.golden.go.txt")
+	if *update {
+		if err := os.WriteFile(goldenPath, result.Source, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(result.Source) != string(want) {
+		t.Errorf("generated output does not match golden file %s (run `go test ./cfgen/gen/... -update` to refresh it if the change is intentional)\n--- got ---\n%s\n--- want ---\n%s", goldenPath, result.Source, want)
+	}
+}
+
+// TestGenerateGolden9 exercises resolveOperand's Pick<T,K>/Omit<T,K>/
+// Partial<T> support (tmp/06-codegen-spec.md 5.1, added to fix
+// VectorizeMatch's Pick<Partial<VectorizeVector>, "values"> &
+// Omit<VectorizeVector, "values"> & {score} intersection): Derived merges
+// Pick<Partial<Base>, "a"> (an optional a), Omit<Base, "a" | "b"> (just
+// c), and an object literal ({d}) into one data type.
+func TestGenerateGolden9(t *testing.T) {
+	doc := loadFixtureIR(t, filepath.Join("testdata", "fixture9.json"))
+	ov, err := LoadOverrides(filepath.Join("testdata", "fixture9.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ov.Validate(doc); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Generate(doc, ov)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Warnings) != 0 {
+		t.Errorf("unexpected warnings: %v", result.Warnings)
+	}
+
+	src := string(result.Source)
+	for _, want := range []string{
+		"type Derived struct {",
+		// Pick<Partial<Base>, "a"> contributes an optional a (string);
+		// per tmp/06-codegen-spec.md 1.3, pointer-wrapping an optional
+		// field only applies when its type is itself a nested data-type
+		// reference, so a scalar-typed optional field (like this one)
+		// stays a plain, non-pointer string, same as elsewhere in cfgen.
+		"A string `js:\"a\"`",
+		// Omit<Base, "a" | "b"> contributes just c (b is dropped by
+		// Omit and never appears in any operand; a is contributed by
+		// Pick instead, not by Omit).
+		"C bool   `js:\"c\"`",
+		// the object literal operand.
+		"D string `js:\"d\"`",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("generated source missing %q", want)
+		}
+	}
+	if i := strings.Index(src, "type Derived struct {"); i >= 0 {
+		block := src[i : strings.Index(src[i:], "}")+i]
+		if strings.Contains(block, "\tB ") {
+			t.Errorf("Derived unexpectedly has a B field (b is excluded from every intersection operand):\n%s", block)
+		}
+	} else {
+		t.Fatal("generated source missing \"type Derived struct {\"")
+	}
+
+	goldenPath := filepath.Join("testdata", "fixture9.golden.go.txt")
 	if *update {
 		if err := os.WriteFile(goldenPath, result.Source, 0o644); err != nil {
 			t.Fatal(err)

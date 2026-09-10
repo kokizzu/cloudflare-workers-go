@@ -12,6 +12,7 @@ package images
 
 import (
 	"io"
+	"net/http"
 	"syscall/js"
 
 	"github.com/syumai/workers-go/exp/internal/jsrt"
@@ -38,17 +39,21 @@ func NewImagesBinding(bindingName string) (*ImagesBinding, error) {
 // Info Get image metadata (type, width and height)
 // @throws {@link ImagesError} with code 9412 if input is not an image
 // @param stream The image bytes
-func (x *ImagesBinding) Info(stream io.Reader, options ImageInputOptions) (js.Value, error) {
+func (x *ImagesBinding) Info(stream io.Reader, options ImageInputOptions) (ImageInfoResponse, error) {
 	p, err := jsrt.Call(x.v, "info", jsrt.ReadableStreamFromReader(stream), options.toJS())
 	if err != nil {
-		return js.Undefined(), err
+		return ImageInfoResponse{}, err
 	}
 	r, err := jsrt.Await(p)
 	if err != nil {
-		return js.Undefined(), err
+		return ImageInfoResponse{}, err
 	}
-	var ret js.Value
-	ret = r
+	var ret ImageInfoResponse
+	if tmp, err := imageInfoResponseFromJS(r); err != nil {
+		return ImageInfoResponse{}, err
+	} else {
+		ret = tmp
+	}
 	return ret, nil
 }
 
@@ -202,22 +207,22 @@ func (o ImageInputOptions) toJS() js.Value {
 
 // ImageTransform
 type ImageTransform struct {
-	Width      float64  `js:"width"`
-	Height     float64  `js:"height"`
-	Background string   `js:"background"`
-	Blur       float64  `js:"blur"`
-	Border     js.Value `js:"border"`
-	Brightness float64  `js:"brightness"`
-	Contrast   float64  `js:"contrast"`
-	Fit        string   `js:"fit"`
-	Flip       string   `js:"flip"`
-	Gamma      float64  `js:"gamma"`
-	Segment    string   `js:"segment"`
-	Gravity    js.Value `js:"gravity"`
-	Rotate     js.Value `js:"rotate"`
-	Saturation float64  `js:"saturation"`
-	Sharpen    float64  `js:"sharpen"`
-	Trim       js.Value `js:"trim"`
+	Width      float64               `js:"width"`
+	Height     float64               `js:"height"`
+	Background string                `js:"background"`
+	Blur       float64               `js:"blur"`
+	Border     *ImageTransformBorder `js:"border"`
+	Brightness float64               `js:"brightness"`
+	Contrast   float64               `js:"contrast"`
+	Fit        string                `js:"fit"`
+	Flip       string                `js:"flip"`
+	Gamma      float64               `js:"gamma"`
+	Segment    string                `js:"segment"`
+	Gravity    js.Value              `js:"gravity"`
+	Rotate     float64               `js:"rotate"`
+	Saturation float64               `js:"saturation"`
+	Sharpen    float64               `js:"sharpen"`
+	Trim       js.Value              `js:"trim"`
 }
 
 func imageTransformFromJS(v js.Value) (ImageTransform, error) {
@@ -243,8 +248,14 @@ func imageTransformFromJS(v js.Value) (ImageTransform, error) {
 		}
 	}
 	{
-		if s := v.Get("border"); !s.IsUndefined() && !s.IsNull() {
-			out.Border = s
+		if !jsrt.IsNil(v.Get("border")) {
+			var val ImageTransformBorder
+			if tmp, err := imageTransformBorderFromJS(v.Get("border")); err != nil {
+				return ImageTransform{}, err
+			} else {
+				val = tmp
+			}
+			out.Border = &val
 		}
 	}
 	{
@@ -284,7 +295,7 @@ func imageTransformFromJS(v js.Value) (ImageTransform, error) {
 	}
 	{
 		if s := v.Get("rotate"); !s.IsUndefined() && !s.IsNull() {
-			out.Rotate = s
+			out.Rotate = s.Float()
 		}
 	}
 	{
@@ -319,8 +330,8 @@ func (o ImageTransform) toJS() js.Value {
 	if o.Blur != 0 {
 		obj.Set("blur", o.Blur)
 	}
-	if !jsrt.IsNil(o.Border) {
-		obj.Set("border", o.Border)
+	if o.Border != nil {
+		obj.Set("border", (*o.Border).toJS())
 	}
 	if o.Brightness != 0 {
 		obj.Set("brightness", o.Brightness)
@@ -343,7 +354,7 @@ func (o ImageTransform) toJS() js.Value {
 	if !jsrt.IsNil(o.Gravity) {
 		obj.Set("gravity", o.Gravity)
 	}
-	if !jsrt.IsNil(o.Rotate) {
+	if o.Rotate != 0 {
 		obj.Set("rotate", o.Rotate)
 	}
 	if o.Saturation != 0 {
@@ -496,18 +507,63 @@ func (o ImageOutputOptions) toJS() js.Value {
 }
 
 // ImageInfoResponse
-type ImageInfoResponse = js.Value
+type ImageInfoResponse struct {
+	Format   string  `js:"format"`
+	FileSize float64 `js:"fileSize"`
+	Width    float64 `js:"width"`
+	Height   float64 `js:"height"`
+}
+
+func imageInfoResponseFromJS(v js.Value) (ImageInfoResponse, error) {
+	var out ImageInfoResponse
+	{
+		out.Format = v.Get("format").String()
+	}
+	{
+		if s := v.Get("fileSize"); !s.IsUndefined() && !s.IsNull() {
+			out.FileSize = s.Float()
+		}
+	}
+	{
+		if s := v.Get("width"); !s.IsUndefined() && !s.IsNull() {
+			out.Width = s.Float()
+		}
+	}
+	{
+		if s := v.Get("height"); !s.IsUndefined() && !s.IsNull() {
+			out.Height = s.Float()
+		}
+	}
+	return out, nil
+}
+
+func (o ImageInfoResponse) toJS() js.Value {
+	obj := jsrt.NewObject()
+	if o.Format != "" {
+		obj.Set("format", o.Format)
+	}
+	if o.FileSize != 0 {
+		obj.Set("fileSize", o.FileSize)
+	}
+	if o.Width != 0 {
+		obj.Set("width", o.Width)
+	}
+	if o.Height != 0 {
+		obj.Set("height", o.Height)
+	}
+	return obj
+}
 
 // ImageTransformationResponseOptions
 type ImageTransformationResponseOptions struct {
-	Headers js.Value `js:"headers"`
+	Headers http.Header `js:"headers"`
 }
 
 func imageTransformationResponseOptionsFromJS(v js.Value) (ImageTransformationResponseOptions, error) {
 	var out ImageTransformationResponseOptions
 	{
 		if s := v.Get("headers"); !s.IsUndefined() && !s.IsNull() {
-			out.Headers = s
+			out.Headers = jsrt.HeadersFromJS(s)
 		}
 	}
 	return out, nil
@@ -515,8 +571,8 @@ func imageTransformationResponseOptionsFromJS(v js.Value) (ImageTransformationRe
 
 func (o ImageTransformationResponseOptions) toJS() js.Value {
 	obj := jsrt.NewObject()
-	if !jsrt.IsNil(o.Headers) {
-		obj.Set("headers", o.Headers)
+	if len(o.Headers) > 0 {
+		obj.Set("headers", jsrt.HeadersToJS(o.Headers))
 	}
 	return obj
 }
@@ -547,7 +603,7 @@ func (o ImageTransformationOutputOptions) toJS() js.Value {
 // TextOptions
 type TextOptions struct {
 	// Font configuration
-	Font js.Value `js:"font"`
+	Font TextOptionsFont `js:"font"`
 	// Font size in points (pt)
 	Size float64 `js:"size"`
 	// Text color in CSS format: hex (#RRGGBB or #RRGGBBAA), rgb(r,g,b), rgba(r,g,b,a), or named colors
@@ -557,7 +613,11 @@ type TextOptions struct {
 func textOptionsFromJS(v js.Value) (TextOptions, error) {
 	var out TextOptions
 	{
-		out.Font = v.Get("font")
+		if tmp, err := textOptionsFontFromJS(v.Get("font")); err != nil {
+			return TextOptions{}, err
+		} else {
+			out.Font = tmp
+		}
 	}
 	{
 		if s := v.Get("size"); !s.IsUndefined() && !s.IsNull() {
@@ -574,14 +634,104 @@ func textOptionsFromJS(v js.Value) (TextOptions, error) {
 
 func (o TextOptions) toJS() js.Value {
 	obj := jsrt.NewObject()
-	if !jsrt.IsNil(o.Font) {
-		obj.Set("font", o.Font)
+	if true {
+		obj.Set("font", o.Font.toJS())
 	}
 	if o.Size != 0 {
 		obj.Set("size", o.Size)
 	}
 	if o.Color != "" {
 		obj.Set("color", o.Color)
+	}
+	return obj
+}
+
+// ImageTransformBorder
+type ImageTransformBorder struct {
+	Color  string  `js:"color"`
+	Width  float64 `js:"width"`
+	Top    float64 `js:"top"`
+	Bottom float64 `js:"bottom"`
+	Left   float64 `js:"left"`
+	Right  float64 `js:"right"`
+}
+
+func imageTransformBorderFromJS(v js.Value) (ImageTransformBorder, error) {
+	var out ImageTransformBorder
+	{
+		if s := v.Get("color"); !s.IsUndefined() && !s.IsNull() {
+			out.Color = s.String()
+		}
+	}
+	{
+		if s := v.Get("width"); !s.IsUndefined() && !s.IsNull() {
+			out.Width = s.Float()
+		}
+	}
+	{
+		if s := v.Get("top"); !s.IsUndefined() && !s.IsNull() {
+			out.Top = s.Float()
+		}
+	}
+	{
+		if s := v.Get("bottom"); !s.IsUndefined() && !s.IsNull() {
+			out.Bottom = s.Float()
+		}
+	}
+	{
+		if s := v.Get("left"); !s.IsUndefined() && !s.IsNull() {
+			out.Left = s.Float()
+		}
+	}
+	{
+		if s := v.Get("right"); !s.IsUndefined() && !s.IsNull() {
+			out.Right = s.Float()
+		}
+	}
+	return out, nil
+}
+
+func (o ImageTransformBorder) toJS() js.Value {
+	obj := jsrt.NewObject()
+	if o.Color != "" {
+		obj.Set("color", o.Color)
+	}
+	if o.Width != 0 {
+		obj.Set("width", o.Width)
+	}
+	if o.Top != 0 {
+		obj.Set("top", o.Top)
+	}
+	if o.Bottom != 0 {
+		obj.Set("bottom", o.Bottom)
+	}
+	if o.Left != 0 {
+		obj.Set("left", o.Left)
+	}
+	if o.Right != 0 {
+		obj.Set("right", o.Right)
+	}
+	return obj
+}
+
+// TextOptionsFont
+type TextOptionsFont struct {
+	// URL to a font file in TrueType (.ttf), OpenType (.otf), WOFF (.woff), or WOFF2 (.woff2) format
+	URL string `js:"url"`
+}
+
+func textOptionsFontFromJS(v js.Value) (TextOptionsFont, error) {
+	var out TextOptionsFont
+	{
+		out.URL = v.Get("url").String()
+	}
+	return out, nil
+}
+
+func (o TextOptionsFont) toJS() js.Value {
+	obj := jsrt.NewObject()
+	if o.URL != "" {
+		obj.Set("url", o.URL)
 	}
 	return obj
 }

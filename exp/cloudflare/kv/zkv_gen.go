@@ -16,6 +16,19 @@
 // variants return js.Value rather than a decoded value, since the JSON
 // shape is caller-defined (KVNamespace<Key>'s "get<ExpectedValue>(...,
 // "json")" generic has no default to map to a concrete Go type).
+//
+// KVNamespace.get/getWithMetadata each have several more overloads left
+// unconfigured (skipped, with a warning): indices 0-4 are the plain-literal-
+// argument / bare-Partial<options> forms superseded by the options-object
+// ones this package already exposes (5-8), and indices 9-11 are the bulk
+// (Array<Key>) arrayBuffer/stream/plain-literal-text forms — get's own
+// options-object bulk forms (12-13) are exposed as GetTextMultiple/
+// GetJSONMultiple (5.1 item 6), but a bulk fetch of raw bytes or streams has
+// little value over calling GetBytes/GetStream per key, so those aren't
+// added. getWithMetadata has no such Map-returning bulk form in the .d.ts
+// source at all (its own indices 9-13 are just its bare-Partial<options>/
+// array-key text/json forms without metadata) — its own bulk-with-metadata
+// equivalent is left for a future addition.
 package kv
 
 import (
@@ -107,6 +120,70 @@ func (x *KVNamespace) GetStream(key string, options KVNamespaceGetOptions) (io.R
 	var ret io.ReadCloser
 	if !jsrt.IsNil(r) {
 		ret = jsrt.ReadCloser(r)
+	}
+	return ret, nil
+}
+
+// GetTextMultiple
+func (x *KVNamespace) GetTextMultiple(key []string, options KVNamespaceGetOptions) (map[string]*string, error) {
+	var arg0 js.Value
+	{
+		arr := js.Global().Get("Array").New(len(key))
+		for i, e := range key {
+			arr.SetIndex(i, e)
+		}
+		arg0 = arr
+	}
+	p, err := jsrt.Call(x.v, "get", arg0, options.toJS())
+	if err != nil {
+		return nil, err
+	}
+	r, err := jsrt.Await(p)
+	if err != nil {
+		return nil, err
+	}
+	var ret map[string]*string
+	ret = make(map[string]*string)
+	mapKeys := js.Global().Get("Array").Call("from", r.Call("keys"))
+	for mapIdx := 0; mapIdx < mapKeys.Length(); mapIdx++ {
+		mapKey := mapKeys.Index(mapIdx).String()
+		var mapVal *string
+		if !jsrt.IsNil(r.Call("get", mapKey)) {
+			var val string
+			val = r.Call("get", mapKey).String()
+			mapVal = &val
+		}
+		ret[mapKey] = mapVal
+	}
+	return ret, nil
+}
+
+// GetJSONMultiple
+func (x *KVNamespace) GetJSONMultiple(key []string, options KVNamespaceGetOptions) (map[string]js.Value, error) {
+	var arg0 js.Value
+	{
+		arr := js.Global().Get("Array").New(len(key))
+		for i, e := range key {
+			arr.SetIndex(i, e)
+		}
+		arg0 = arr
+	}
+	p, err := jsrt.Call(x.v, "get", arg0, options.toJS())
+	if err != nil {
+		return nil, err
+	}
+	r, err := jsrt.Await(p)
+	if err != nil {
+		return nil, err
+	}
+	var ret map[string]js.Value
+	ret = make(map[string]js.Value)
+	mapKeys := js.Global().Get("Array").Call("from", r.Call("keys"))
+	for mapIdx := 0; mapIdx < mapKeys.Length(); mapIdx++ {
+		mapKey := mapKeys.Index(mapIdx).String()
+		var mapVal js.Value
+		mapVal = r.Call("get", mapKey)
+		ret[mapKey] = mapVal
 	}
 	return ret, nil
 }

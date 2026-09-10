@@ -50,6 +50,13 @@ types:
   # Size in bytes; matches the R2Object.size / R2UploadedPart.partNumber
   # precedent in r2.yaml for byte-count-ish number fields.
   ForwardableEmailMessage.rawSize: "int"
+  # EmailMessage is deliberately excluded from include: (see the package
+  # doc comment above) — these two overrides just make the resulting
+  # js.Value fallback for Send/Reply's message parameter an explicit,
+  # documented choice instead of cfgen's generic "ref not in include"
+  # warning.
+  SendEmail.send.params.message: "js.Value"
+  ForwardableEmailMessage.reply.params.message: "js.Value"
 overloads:
   SendEmail.send:
     - { index: 0, name: Send }

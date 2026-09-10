@@ -191,7 +191,7 @@ type WorkflowInstanceCreateOptions struct {
 	Params js.Value `js:"params"`
 	// The retention policy for Workflow instance.
 	// Defaults to the maximum retention period available for the owner's account.
-	Retention js.Value `js:"retention"`
+	Retention *WorkflowInstanceCreateOptionsRetention `js:"retention"`
 	// A best-effort geographic placement preference for the Workflow instance.
 	// See `WorkflowInstanceLocationHint` for supported regions.
 	LocationHint WorkflowInstanceLocationHint `js:"locationHint"`
@@ -210,8 +210,14 @@ func workflowInstanceCreateOptionsFromJS(v js.Value) (WorkflowInstanceCreateOpti
 		}
 	}
 	{
-		if s := v.Get("retention"); !s.IsUndefined() && !s.IsNull() {
-			out.Retention = s
+		if !jsrt.IsNil(v.Get("retention")) {
+			var val WorkflowInstanceCreateOptionsRetention
+			if tmp, err := workflowInstanceCreateOptionsRetentionFromJS(v.Get("retention")); err != nil {
+				return WorkflowInstanceCreateOptions{}, err
+			} else {
+				val = tmp
+			}
+			out.Retention = &val
 		}
 	}
 	{
@@ -230,8 +236,8 @@ func (o WorkflowInstanceCreateOptions) toJS() js.Value {
 	if !jsrt.IsNil(o.Params) {
 		obj.Set("params", o.Params)
 	}
-	if !jsrt.IsNil(o.Retention) {
-		obj.Set("retention", o.Retention)
+	if o.Retention != nil {
+		obj.Set("retention", (*o.Retention).toJS())
 	}
 	if o.LocationHint != "" {
 		obj.Set("locationHint", string(o.LocationHint))
@@ -268,14 +274,20 @@ func (o WorkflowInstanceTerminateOptions) toJS() js.Value {
 type WorkflowInstanceRestartOptions struct {
 	// Restart from a specific step. If omitted, the instance restarts from the beginning.
 	// The step must exist in the instance's execution history.
-	From js.Value `js:"from"`
+	From *WorkflowInstanceRestartOptionsFrom `js:"from"`
 }
 
 func workflowInstanceRestartOptionsFromJS(v js.Value) (WorkflowInstanceRestartOptions, error) {
 	var out WorkflowInstanceRestartOptions
 	{
-		if s := v.Get("from"); !s.IsUndefined() && !s.IsNull() {
-			out.From = s
+		if !jsrt.IsNil(v.Get("from")) {
+			var val WorkflowInstanceRestartOptionsFrom
+			if tmp, err := workflowInstanceRestartOptionsFromFromJS(v.Get("from")); err != nil {
+				return WorkflowInstanceRestartOptions{}, err
+			} else {
+				val = tmp
+			}
+			out.From = &val
 		}
 	}
 	return out, nil
@@ -283,8 +295,8 @@ func workflowInstanceRestartOptionsFromJS(v js.Value) (WorkflowInstanceRestartOp
 
 func (o WorkflowInstanceRestartOptions) toJS() js.Value {
 	obj := jsrt.NewObject()
-	if !jsrt.IsNil(o.From) {
-		obj.Set("from", o.From)
+	if o.From != nil {
+		obj.Set("from", (*o.From).toJS())
 	}
 	return obj
 }
@@ -309,22 +321,30 @@ const (
 
 // WorkflowBatchDeleteResult
 type WorkflowBatchDeleteResult struct {
-	Deleted []js.Value `js:"deleted"`
-	Errors  []js.Value `js:"errors"`
+	Deleted []WorkflowBatchDeleteResultDeleted `js:"deleted"`
+	Errors  []WorkflowBatchDeleteResultErrors  `js:"errors"`
 }
 
 func workflowBatchDeleteResultFromJS(v js.Value) (WorkflowBatchDeleteResult, error) {
 	var out WorkflowBatchDeleteResult
 	{
-		out.Deleted = make([]js.Value, v.Get("deleted").Length())
+		out.Deleted = make([]WorkflowBatchDeleteResultDeleted, v.Get("deleted").Length())
 		for i := range out.Deleted {
-			out.Deleted[i] = v.Get("deleted").Index(i)
+			if tmp, err := workflowBatchDeleteResultDeletedFromJS(v.Get("deleted").Index(i)); err != nil {
+				return WorkflowBatchDeleteResult{}, err
+			} else {
+				out.Deleted[i] = tmp
+			}
 		}
 	}
 	{
-		out.Errors = make([]js.Value, v.Get("errors").Length())
+		out.Errors = make([]WorkflowBatchDeleteResultErrors, v.Get("errors").Length())
 		for i := range out.Errors {
-			out.Errors[i] = v.Get("errors").Index(i)
+			if tmp, err := workflowBatchDeleteResultErrorsFromJS(v.Get("errors").Index(i)); err != nil {
+				return WorkflowBatchDeleteResult{}, err
+			} else {
+				out.Errors[i] = tmp
+			}
 		}
 	}
 	return out, nil
@@ -335,14 +355,14 @@ func (o WorkflowBatchDeleteResult) toJS() js.Value {
 	if len(o.Deleted) > 0 {
 		arr := js.Global().Get("Array").New(len(o.Deleted))
 		for i, e := range o.Deleted {
-			arr.SetIndex(i, e)
+			arr.SetIndex(i, e.toJS())
 		}
 		obj.Set("deleted", arr)
 	}
 	if len(o.Errors) > 0 {
 		arr := js.Global().Get("Array").New(len(o.Errors))
 		for i, e := range o.Errors {
-			arr.SetIndex(i, e)
+			arr.SetIndex(i, e.toJS())
 		}
 		obj.Set("errors", arr)
 	}
@@ -351,9 +371,9 @@ func (o WorkflowBatchDeleteResult) toJS() js.Value {
 
 // InstanceStatus
 type InstanceStatus struct {
-	Status string   `js:"status"`
-	Error  js.Value `js:"error"`
-	Output js.Value `js:"output"`
+	Status string               `js:"status"`
+	Error  *InstanceStatusError `js:"error"`
+	Output js.Value             `js:"output"`
 }
 
 func instanceStatusFromJS(v js.Value) (InstanceStatus, error) {
@@ -362,8 +382,14 @@ func instanceStatusFromJS(v js.Value) (InstanceStatus, error) {
 		out.Status = v.Get("status").String()
 	}
 	{
-		if s := v.Get("error"); !s.IsUndefined() && !s.IsNull() {
-			out.Error = s
+		if !jsrt.IsNil(v.Get("error")) {
+			var val InstanceStatusError
+			if tmp, err := instanceStatusErrorFromJS(v.Get("error")); err != nil {
+				return InstanceStatus{}, err
+			} else {
+				val = tmp
+			}
+			out.Error = &val
 		}
 	}
 	{
@@ -379,11 +405,173 @@ func (o InstanceStatus) toJS() js.Value {
 	if o.Status != "" {
 		obj.Set("status", o.Status)
 	}
-	if !jsrt.IsNil(o.Error) {
-		obj.Set("error", o.Error)
+	if o.Error != nil {
+		obj.Set("error", (*o.Error).toJS())
 	}
 	if !jsrt.IsNil(o.Output) {
 		obj.Set("output", o.Output)
+	}
+	return obj
+}
+
+// WorkflowRetentionDuration
+type WorkflowRetentionDuration = js.Value
+
+// WorkflowInstanceCreateOptionsRetention
+type WorkflowInstanceCreateOptionsRetention struct {
+	SuccessRetention js.Value `js:"successRetention"`
+	ErrorRetention   js.Value `js:"errorRetention"`
+}
+
+func workflowInstanceCreateOptionsRetentionFromJS(v js.Value) (WorkflowInstanceCreateOptionsRetention, error) {
+	var out WorkflowInstanceCreateOptionsRetention
+	{
+		if s := v.Get("successRetention"); !s.IsUndefined() && !s.IsNull() {
+			out.SuccessRetention = s
+		}
+	}
+	{
+		if s := v.Get("errorRetention"); !s.IsUndefined() && !s.IsNull() {
+			out.ErrorRetention = s
+		}
+	}
+	return out, nil
+}
+
+func (o WorkflowInstanceCreateOptionsRetention) toJS() js.Value {
+	obj := jsrt.NewObject()
+	if !jsrt.IsNil(o.SuccessRetention) {
+		obj.Set("successRetention", o.SuccessRetention)
+	}
+	if !jsrt.IsNil(o.ErrorRetention) {
+		obj.Set("errorRetention", o.ErrorRetention)
+	}
+	return obj
+}
+
+// WorkflowInstanceRestartOptionsFrom
+type WorkflowInstanceRestartOptionsFrom struct {
+	// The step name as defined in your workflow code.
+	Name string `js:"name"`
+	// 1-indexed occurrence of this step name. Use when the same step name appears multiple times (e.g. in a loop).
+	// @default 1
+	Count float64 `js:"count"`
+	// Step type filter. Use when different step types share the same name.
+	Type string `js:"type"`
+}
+
+func workflowInstanceRestartOptionsFromFromJS(v js.Value) (WorkflowInstanceRestartOptionsFrom, error) {
+	var out WorkflowInstanceRestartOptionsFrom
+	{
+		out.Name = v.Get("name").String()
+	}
+	{
+		if s := v.Get("count"); !s.IsUndefined() && !s.IsNull() {
+			out.Count = s.Float()
+		}
+	}
+	{
+		if s := v.Get("type"); !s.IsUndefined() && !s.IsNull() {
+			out.Type = s.String()
+		}
+	}
+	return out, nil
+}
+
+func (o WorkflowInstanceRestartOptionsFrom) toJS() js.Value {
+	obj := jsrt.NewObject()
+	if o.Name != "" {
+		obj.Set("name", o.Name)
+	}
+	if o.Count != 0 {
+		obj.Set("count", o.Count)
+	}
+	if o.Type != "" {
+		obj.Set("type", o.Type)
+	}
+	return obj
+}
+
+// WorkflowBatchDeleteResultDeleted
+type WorkflowBatchDeleteResultDeleted struct {
+	ID string `js:"id"`
+}
+
+func workflowBatchDeleteResultDeletedFromJS(v js.Value) (WorkflowBatchDeleteResultDeleted, error) {
+	var out WorkflowBatchDeleteResultDeleted
+	{
+		out.ID = v.Get("id").String()
+	}
+	return out, nil
+}
+
+func (o WorkflowBatchDeleteResultDeleted) toJS() js.Value {
+	obj := jsrt.NewObject()
+	if o.ID != "" {
+		obj.Set("id", o.ID)
+	}
+	return obj
+}
+
+// WorkflowBatchDeleteResultErrors
+type WorkflowBatchDeleteResultErrors struct {
+	ID      string  `js:"id"`
+	Code    float64 `js:"code"`
+	Message string  `js:"message"`
+}
+
+func workflowBatchDeleteResultErrorsFromJS(v js.Value) (WorkflowBatchDeleteResultErrors, error) {
+	var out WorkflowBatchDeleteResultErrors
+	{
+		out.ID = v.Get("id").String()
+	}
+	{
+		out.Code = v.Get("code").Float()
+	}
+	{
+		out.Message = v.Get("message").String()
+	}
+	return out, nil
+}
+
+func (o WorkflowBatchDeleteResultErrors) toJS() js.Value {
+	obj := jsrt.NewObject()
+	if o.ID != "" {
+		obj.Set("id", o.ID)
+	}
+	if o.Code != 0 {
+		obj.Set("code", o.Code)
+	}
+	if o.Message != "" {
+		obj.Set("message", o.Message)
+	}
+	return obj
+}
+
+// InstanceStatusError
+type InstanceStatusError struct {
+	Name    string `js:"name"`
+	Message string `js:"message"`
+}
+
+func instanceStatusErrorFromJS(v js.Value) (InstanceStatusError, error) {
+	var out InstanceStatusError
+	{
+		out.Name = v.Get("name").String()
+	}
+	{
+		out.Message = v.Get("message").String()
+	}
+	return out, nil
+}
+
+func (o InstanceStatusError) toJS() js.Value {
+	obj := jsrt.NewObject()
+	if o.Name != "" {
+		obj.Set("name", o.Name)
+	}
+	if o.Message != "" {
+		obj.Set("message", o.Message)
 	}
 	return obj
 }

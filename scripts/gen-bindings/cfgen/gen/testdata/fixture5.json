@@ -72,6 +72,48 @@
           ],
           "returns": { "k": "prim", "name": "void" },
           "typeParams": []
+        },
+        {
+          "kind": "method",
+          "name": "getAllOrNull",
+          "doc": "a Map<string, string | null> return becomes map[string]*string (tmp/06-codegen-spec.md 5.1 item 6)",
+          "params": [],
+          "returns": {
+            "k": "ref",
+            "name": "Promise",
+            "args": [
+              {
+                "k": "ref",
+                "name": "Map",
+                "args": [
+                  { "k": "prim", "name": "string" },
+                  { "k": "union", "types": [ { "k": "prim", "name": "string" }, { "k": "prim", "name": "null" } ] }
+                ]
+              }
+            ]
+          },
+          "typeParams": []
+        },
+        {
+          "kind": "method",
+          "name": "getAllRawOrNull",
+          "doc": "a Map<string, T | null> return with an unresolved typeParam T falls back to map[string]js.Value (item 3's silent typeParam fallback plus item 6's nullableReturnConv, which leaves js.Value untouched since it already round-trips null on its own)",
+          "params": [],
+          "returns": {
+            "k": "ref",
+            "name": "Promise",
+            "args": [
+              {
+                "k": "ref",
+                "name": "Map",
+                "args": [
+                  { "k": "prim", "name": "string" },
+                  { "k": "union", "types": [ { "k": "typeParam", "name": "T" }, { "k": "prim", "name": "null" } ] }
+                ]
+              }
+            ]
+          },
+          "typeParams": [ { "name": "T" } ]
         }
       ]
     }

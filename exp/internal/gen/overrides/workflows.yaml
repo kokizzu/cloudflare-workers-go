@@ -11,6 +11,7 @@ include:
   - WorkflowInstanceLocationHint
   - WorkflowBatchDeleteResult
   - InstanceStatus
+  - WorkflowRetentionDuration
 bindings:
   - Workflow
 types:
@@ -18,6 +19,18 @@ types:
   # user-defined event payload shape); cfgen does not generate Go generics,
   # so it is passed through as an opaque js.Value.
   WorkflowInstanceCreateOptions.params: "js.Value"
+  # WorkflowRetentionDuration = WorkflowSleepDuration = (a template-literal
+  # type like `${number} ${"second"|"minute"|...}${"s"|""}` | number),
+  # which extract.ts can't resolve (template-literal types round-trip as
+  # "unsupported"). WorkflowRetentionDuration is only reachable today via
+  # WorkflowInstanceCreateOptions.retention's inline
+  # {successRetention?, errorRetention?} object literal (itself synthesized
+  # into its own data type per 5.1 item 1); since a "types:" override can
+  # only target a synthesized type's *own* field once cfgen has already
+  # invented its name (not known ahead of time in this YAML), this decl is
+  # instead added to include directly and overridden at the decl level, so
+  # the ref from the synthesized type resolves to it.
+  WorkflowRetentionDuration: "js.Value"
 exclude:
   # createBatch takes an array of WorkflowInstanceCreateOptions<PARAMS> and
   # returns an array of WorkflowInstance handles; a batch API is left for a

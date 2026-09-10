@@ -1,0 +1,10 @@
+package: picks
+doc: |
+  Package picks is a ninth synthetic fixture package, covering
+  tmp/06-codegen-spec.md 5.1's Pick<T,K>/Omit<T,K>/Partial<T> support in
+  resolveOperand's intersection flattening (used by VectorizeMatch's own
+  Pick<Partial<VectorizeVector>, "values"> & Omit<VectorizeVector, "values">
+  & {score} intersection).
+include:
+  - Base
+  - Derived

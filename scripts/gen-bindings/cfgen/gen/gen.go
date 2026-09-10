@@ -17,6 +17,8 @@ import (
 type Result struct {
 	Source   []byte
 	Warnings []string
+	// Infos are informational (non-warning) messages; see Package.notef.
+	Infos []string
 }
 
 // Generate produces the formatted Go source for ov, using doc as the
@@ -30,6 +32,17 @@ func Generate(doc *ir.IR, ov *Overrides) (*Result, error) {
 		if !ok {
 			return nil, fmt.Errorf("include: declaration %q not found", name)
 		}
+		if err := p.genDecl(&body, d); err != nil {
+			return nil, fmt.Errorf("%s: %w", d.Name, err)
+		}
+	}
+	// Emit any data types synthesized for inline object/union type
+	// literals encountered above (tmp/06-codegen-spec.md 5.1 item 1). The
+	// index-based loop (rather than range) picks up entries appended
+	// during its own iterations, since generating one synthesized type's
+	// own fields can synthesize further nested ones.
+	for i := 0; i < len(p.synthesized); i++ {
+		d := p.synthesized[i]
 		if err := p.genDecl(&body, d); err != nil {
 			return nil, fmt.Errorf("%s: %w", d.Name, err)
 		}
@@ -57,7 +70,7 @@ func Generate(doc *ir.IR, ov *Overrides) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("formatting generated source: %w\n---\n%s", err, out.String())
 	}
-	return &Result{Source: formatted, Warnings: p.warnings}, nil
+	return &Result{Source: formatted, Warnings: p.warnings, Infos: p.infos}, nil
 }
 
 func writeImports(out *strings.Builder, imports map[string]bool) {
@@ -84,6 +97,10 @@ func writeImports(out *strings.Builder, imports map[string]bool) {
 }
 
 func (p *Package) genDecl(sb *strings.Builder, d *ir.Decl) error {
+	prevDeclName, prevMemberName := p.curDeclName, p.curMemberName
+	p.curDeclName, p.curMemberName = d.Name, ""
+	defer func() { p.curDeclName, p.curMemberName = prevDeclName, prevMemberName }()
+
 	switch classify(p.declByName, d) {
 	case KindHandle:
 		return p.genHandle(sb, d)
@@ -201,11 +218,16 @@ func (p *Package) genGetter(sb *strings.Builder, d *ir.Decl, structName string, 
 	goName := p.memberName(d.Name, m.Name)
 	override := p.typeOverride(d.Name, m.Name, "")
 	t := m.Type
-	conv, err := p.convFor(t, override)
+	prevMember := p.curMemberName
+	p.curMemberName = m.Name
+	p.resetNotes()
+	conv, err := p.convForNamed(t, override, structName+goName)
+	notes := p.takeNotes()
+	p.curMemberName = prevMember
 	if err != nil {
 		return err
 	}
-	docComment(sb, m.Doc, goName)
+	docComment(sb, appendNotesToDoc(m.Doc, notes), goName)
 	fmt.Fprintf(sb, "func (x *%s) %s() %s {\n", structName, goName, conv.GoType)
 	src := fmt.Sprintf("x.v.Get(%q)", m.Name)
 	sb.WriteString("\tvar ret " + conv.GoType + "\n")
@@ -233,6 +255,10 @@ func (p *Package) genGetter(sb *strings.Builder, d *ir.Decl, structName string, 
 // constant instead. Overloads with no matching entry are skipped, with a
 // warning.
 func (p *Package) genMethodGroup(sb *strings.Builder, d *ir.Decl, structName string, members []ir.Member) error {
+	prevMember := p.curMemberName
+	p.curMemberName = members[0].Name
+	defer func() { p.curMemberName = prevMember }()
+
 	if len(members) == 1 {
 		goName := p.memberName(d.Name, members[0].Name)
 		return p.genMethod(sb, d, structName, members[0], goName, -1, "")
@@ -282,9 +308,25 @@ func (p *Package) genMethodGroup(sb *strings.Builder, d *ir.Decl, structName str
 // genMethodGroup) is omitted from the Go signature and dropExpr — a Go
 // constant expression — is passed in its place at the call site.
 func (p *Package) genMethod(sb *strings.Builder, d *ir.Decl, structName string, m ir.Member, goName string, dropIdx int, dropExpr string) error {
+	// tmp/06-codegen-spec.md 5.1 item 5: a method whose only parameter is
+	// a callback of shape "(a: A) => Promise<U>" / "() => Promise<U>"
+	// gets a dedicated Go signature (func(*A) (U, error) etc.) instead of
+	// falling back to js.Value for the unsupported function-typed param.
+	// Not applicable when genMethodGroup is dropping a literal
+	// discriminant parameter (dropIdx >= 0): no currently generated
+	// overloaded method has this shape.
+	if dropIdx < 0 {
+		if fn, ok := detectCallbackMethod(m); ok {
+			return p.genCallbackMethod(sb, d, structName, m, goName, fn)
+		}
+	}
+
 	prevMethodTP := p.curMethodTypeParams
 	p.curMethodTypeParams = m.TypeParams
 	defer func() { p.curMethodTypeParams = prevMethodTP }()
+
+	p.resetNotes()
+	methodHint := structName + goName
 
 	var params []string
 	var argExprs []string
@@ -306,7 +348,7 @@ func (p *Package) genMethod(sb *strings.Builder, d *ir.Decl, structName string, 
 			if elemType != nil && elemType.K == "array" {
 				elemType = elemType.Elem
 			}
-			elemConv, err := p.convForParam(elemType, "")
+			elemConv, err := p.convForParam(elemType, "", methodHint+exportedName(prm.Name))
 			if err != nil {
 				return err
 			}
@@ -337,7 +379,7 @@ func (p *Package) genMethod(sb *strings.Builder, d *ir.Decl, structName string, 
 		}
 		pname := goParamName(prm.Name)
 		override := p.typeOverride(d.Name, m.Name, "params."+prm.Name)
-		conv, err := p.convForParam(prm.Type, override)
+		conv, err := p.convForParam(prm.Type, override, methodHint+exportedName(prm.Name))
 		if err != nil {
 			return err
 		}
@@ -377,8 +419,37 @@ func (p *Package) genMethod(sb *strings.Builder, d *ir.Decl, structName string, 
 	}
 	isVoid := innerType == nil || (innerType.K == "prim" && innerType.Name == "void")
 
+	// The return type's own conversion is resolved here, ahead of
+	// docComment below, purely so that any notef notes it raises (e.g.
+	// the single-included-ref-union rule) land in pendingNotes before
+	// takeNotes drains them into the emitted doc comment — the actual use
+	// of conv/nullable is unchanged from before this reordering.
+	var conv exprConv
+	var nullable bool
+	if !isVoid {
+		retOverride := p.typeOverride(d.Name, m.Name, "returns")
+		// tmp/06-codegen-spec.md 2.1 item 3: Promise<T | null/undefined>
+		// (T a prim, handle, or data type) becomes (*T, error) rather
+		// than silently collapsing null to T's zero value. An explicit
+		// types: override always wins (the author has already chosen the
+		// exact Go type/behavior).
+		nonNullType := innerType
+		if retOverride == "" {
+			nonNullType, nullable = splitNullable(innerType)
+		}
+		var err error
+		conv, err = p.convForNamed(nonNullType, retOverride, methodHint)
+		if err != nil {
+			return err
+		}
+		if nullable {
+			conv = p.nullableReturnConv(conv)
+		}
+	}
+
 	p.useImport("jsrt")
-	docComment(sb, m.Doc, goName)
+	doc := appendNotesToDoc(m.Doc, p.takeNotes())
+	docComment(sb, doc, goName)
 
 	callArgs := "x.v, " + fmt.Sprintf("%q", m.Name)
 	switch {
@@ -412,22 +483,6 @@ func (p *Package) genMethod(sb *strings.Builder, d *ir.Decl, structName string, 
 		return nil
 	}
 
-	retOverride := p.typeOverride(d.Name, m.Name, "returns")
-	// tmp/06-codegen-spec.md 2.1 item 3: Promise<T | null/undefined> (T a
-	// prim, handle, or data type) becomes (*T, error) rather than silently
-	// collapsing null to T's zero value. An explicit types: override always
-	// wins (the author has already chosen the exact Go type/behavior).
-	nonNullType, nullable := innerType, false
-	if retOverride == "" {
-		nonNullType, nullable = splitNullable(innerType)
-	}
-	conv, err := p.convFor(nonNullType, retOverride)
-	if err != nil {
-		return err
-	}
-	if nullable {
-		conv = p.nullableReturnConv(conv)
-	}
 	fmt.Fprintf(sb, "func (x *%s) %s(%s) (%s, error) {\n", structName, goName, strings.Join(params, ", "), conv.GoType)
 	for _, b := range argBlocks {
 		sb.WriteString(indentBlock(b, 1))
@@ -440,6 +495,147 @@ func (p *Package) genMethod(sb *strings.Builder, d *ir.Decl, structName string, 
 	}
 	sb.WriteString("\tvar ret " + conv.GoType + "\n")
 	sb.WriteString(indentBlock(conv.FromJS("ret", "r", conv.ZeroExpr), 1))
+	sb.WriteString("\treturn ret, nil\n}\n\n")
+	return nil
+}
+
+// detectCallbackMethod reports whether m's single parameter is a callback
+// of shape "(a: A) => Promise<U>" or "() => Promise<U>" — the case
+// genCallbackMethod generates a dedicated Go signature for, per
+// tmp/06-codegen-spec.md 5.1 item 5. On success it returns the callback's
+// own function type (m.Params[0].Type); its Params has 0 or 1 entries and
+// its Returns is always a Promise ref.
+func detectCallbackMethod(m ir.Member) (*ir.Type, bool) {
+	if len(m.Params) != 1 {
+		return nil, false
+	}
+	prm := m.Params[0]
+	if prm.Rest || prm.Type == nil || prm.Type.K != "function" {
+		return nil, false
+	}
+	fn := prm.Type
+	if len(fn.Params) > 1 {
+		return nil, false
+	}
+	if fn.Returns == nil || fn.Returns.K != "ref" || fn.Returns.Name != "Promise" {
+		return nil, false
+	}
+	return fn, true
+}
+
+// genCallbackMethod emits one Go method for a member matched by
+// detectCallbackMethod: a callback parameter "func(a: A) => Promise<U>" (or
+// "() => Promise<U>") becomes a Go func(*A) (U, error) (or func() (U,
+// error); U void drops the U and becomes just func(...) error) parameter.
+// The generated body wraps the Go closure as a JS function via
+// jsrt.AsyncFunc (releasing it once the outer JS call has settled) — see
+// tmp/06-codegen-spec.md 5.1 item 5. The outer method's own return type is
+// assumed to mirror the callback's (Promise<T> in both places, as in every
+// currently generated case — DurableObjectStorage.transaction and
+// DurableObjectState.blockConcurrencyWhile both return Promise<T> for the
+// same T their callback returns); a hypothetical future case where they
+// differ isn't specially detected, since none exists in the packages cfgen
+// currently generates.
+func (p *Package) genCallbackMethod(sb *strings.Builder, d *ir.Decl, structName string, m ir.Member, goName string, fn *ir.Type) error {
+	prevMethodTP := p.curMethodTypeParams
+	p.curMethodTypeParams = m.TypeParams
+	defer func() { p.curMethodTypeParams = prevMethodTP }()
+
+	hint := structName + goName
+	hasArg := len(fn.Params) == 1
+	var argConv exprConv
+	if hasArg {
+		var err error
+		argConv, err = p.convForNamed(fn.Params[0].Type, "", hint+"Arg")
+		if err != nil {
+			return err
+		}
+	}
+
+	var innerType *ir.Type
+	if len(fn.Returns.Args) > 0 {
+		innerType = &fn.Returns.Args[0]
+	} else {
+		innerType = &ir.Type{K: "prim", Name: "void"}
+	}
+	isVoid := innerType.K == "prim" && innerType.Name == "void"
+	var retConv exprConv
+	if !isVoid {
+		var err error
+		retConv, err = p.convForParam(innerType, "", hint+"Result")
+		if err != nil {
+			return err
+		}
+	}
+
+	var cbGoType string
+	switch {
+	case hasArg && !isVoid:
+		cbGoType = "func(" + argConv.GoType + ") (" + retConv.GoType + ", error)"
+	case hasArg:
+		cbGoType = "func(" + argConv.GoType + ") error"
+	case !isVoid:
+		cbGoType = "func() (" + retConv.GoType + ", error)"
+	default:
+		cbGoType = "func() error"
+	}
+
+	p.useImport("jsrt")
+	docComment(sb, m.Doc, goName)
+
+	cbParamName := goParamName(m.Params[0].Name)
+	isAsync := m.Returns != nil && m.Returns.K == "ref" && m.Returns.Name == "Promise"
+
+	if isVoid {
+		fmt.Fprintf(sb, "func (x *%s) %s(%s %s) error {\n", structName, goName, cbParamName, cbGoType)
+	} else {
+		fmt.Fprintf(sb, "func (x *%s) %s(%s %s) (%s, error) {\n", structName, goName, cbParamName, cbGoType, retConv.GoType)
+	}
+
+	sb.WriteString("\tcb := jsrt.AsyncFunc(func(cbArgs []js.Value) (js.Value, error) {\n")
+	if hasArg {
+		sb.WriteString("\t\tvar a0 " + argConv.GoType + "\n")
+		sb.WriteString(indentBlock(argConv.FromJS("a0", "cbArgs[0]", "js.Value{}"), 2))
+	}
+	switch {
+	case hasArg && !isVoid:
+		sb.WriteString("\t\tresult, err := " + cbParamName + "(a0)\n")
+	case hasArg:
+		sb.WriteString("\t\terr := " + cbParamName + "(a0)\n")
+	case !isVoid:
+		sb.WriteString("\t\tresult, err := " + cbParamName + "()\n")
+	default:
+		sb.WriteString("\t\terr := " + cbParamName + "()\n")
+	}
+	sb.WriteString("\t\tif err != nil {\n\t\t\treturn js.Value{}, err\n\t\t}\n")
+	if isVoid {
+		sb.WriteString("\t\treturn js.Undefined(), nil\n")
+	} else {
+		pre, expr := retConv.ToJS("result")
+		sb.WriteString(indentBlock(pre, 2))
+		sb.WriteString("\t\treturn " + expr + ", nil\n")
+	}
+	sb.WriteString("\t})\n")
+	sb.WriteString("\tdefer cb.Release()\n")
+
+	callArgs := fmt.Sprintf("x.v, %q, cb", m.Name)
+	if isVoid {
+		if isAsync {
+			sb.WriteString("\tp, err := jsrt.Call(" + callArgs + ")\n\tif err != nil {\n\t\treturn err\n\t}\n\t_, err = jsrt.Await(p)\n\treturn err\n")
+		} else {
+			sb.WriteString("\t_, err := jsrt.Call(" + callArgs + ")\n\treturn err\n")
+		}
+		sb.WriteString("}\n\n")
+		return nil
+	}
+	if isAsync {
+		fmt.Fprintf(sb, "\tp, err := jsrt.Call(%s)\n\tif err != nil {\n\t\treturn %s, err\n\t}\n", callArgs, retConv.ZeroExpr)
+		sb.WriteString("\tr, err := jsrt.Await(p)\n\tif err != nil {\n\t\treturn " + retConv.ZeroExpr + ", err\n\t}\n")
+	} else {
+		fmt.Fprintf(sb, "\tr, err := jsrt.Call(%s)\n\tif err != nil {\n\t\treturn %s, err\n\t}\n", callArgs, retConv.ZeroExpr)
+	}
+	sb.WriteString("\tvar ret " + retConv.GoType + "\n")
+	sb.WriteString(indentBlock(retConv.FromJS("ret", "r", retConv.ZeroExpr), 1))
 	sb.WriteString("\treturn ret, nil\n}\n\n")
 	return nil
 }
@@ -484,12 +680,12 @@ func (p *Package) genData(sb *strings.Builder, d *ir.Decl) error {
 			continue
 		}
 		fieldName := p.memberName(d.Name, m.Name)
-		conv, err := p.fieldConv(d, m)
+		conv, doc, err := p.fieldConv(d, m)
 		if err != nil {
 			return err
 		}
-		if m.Doc != "" {
-			for _, l := range strings.Split(m.Doc, "\n") {
+		if doc != "" {
+			for _, l := range strings.Split(doc, "\n") {
 				sb.WriteString("\t// " + l + "\n")
 			}
 		}
@@ -521,7 +717,7 @@ func (p *Package) genDataFromJS(sb *strings.Builder, d *ir.Decl, structName stri
 			continue
 		}
 		fieldName := p.memberName(d.Name, m.Name)
-		conv, err := p.fieldConv(d, m)
+		conv, _, err := p.fieldConv(d, m)
 		if err != nil {
 			return err
 		}
@@ -559,7 +755,7 @@ func (p *Package) genDataToJS(sb *strings.Builder, d *ir.Decl, structName string
 			continue
 		}
 		fieldName := p.memberName(d.Name, m.Name)
-		conv, err := p.fieldConv(d, m)
+		conv, _, err := p.fieldConv(d, m)
 		if err != nil {
 			return err
 		}

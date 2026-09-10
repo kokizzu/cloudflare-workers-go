@@ -87,10 +87,56 @@ func resolveDataMembersDepth(declByName map[string]*ir.Decl, d *ir.Decl, depth i
 }
 
 // resolveOperand resolves one constituent of an extends list or
-// intersection into a member list.
+// intersection into a member list. Besides a plain ref/object/union, it
+// also understands the three built-in TypeScript utility types the
+// generated packages' own intersections happen to use — Partial<T>
+// (T's members, all made optional), and Pick<T, K> / Omit<T, K> (T's
+// members filtered to those named by the string-literal-or-union-of-those
+// K, keeping or dropping them respectively) — recursing through
+// resolveOperand itself so these can nest (e.g.
+// Pick<Partial<VectorizeVector>, "values">, as VectorizeMatch's own
+// intersection does). Any other ref naming a utility/mapped/conditional
+// type extract.ts couldn't otherwise resolve is left unresolvable (ok
+// false), same as before these three were special-cased.
 func resolveOperand(declByName map[string]*ir.Decl, t ir.Type, depth int) ([]ir.Member, bool) {
 	switch t.K {
 	case "ref":
+		switch t.Name {
+		case "Partial":
+			if len(t.Args) != 1 {
+				return nil, false
+			}
+			m, ok := resolveOperand(declByName, t.Args[0], depth)
+			if !ok {
+				return nil, false
+			}
+			out := make([]ir.Member, len(m))
+			for i, mm := range m {
+				mm.Optional = true
+				out[i] = mm
+			}
+			return out, true
+		case "Pick", "Omit":
+			if len(t.Args) != 2 {
+				return nil, false
+			}
+			m, ok := resolveOperand(declByName, t.Args[0], depth)
+			if !ok {
+				return nil, false
+			}
+			keys, ok := stringLiteralSet(t.Args[1])
+			if !ok {
+				return nil, false
+			}
+			keep := t.Name == "Pick"
+			var out []ir.Member
+			for _, mm := range m {
+				if keys[mm.Name] == keep {
+					out = append(out, mm)
+				}
+			}
+			return out, true
+		}
 		d, ok := declByName[t.Name]
 		if !ok {
 			return nil, false
@@ -103,6 +149,28 @@ func resolveOperand(declByName map[string]*ir.Decl, t ir.Type, depth int) ([]ir.
 	default:
 		return nil, false
 	}
+}
+
+// stringLiteralSet reports the set of string values named by t, when t is
+// either a single string literal or a union of only string literals (the
+// two shapes Pick<T, K>/Omit<T, K>'s K argument takes in practice) — or ok
+// false for anything else (e.g. a bare "string", which would make every
+// field match and isn't a real Pick/Omit usage).
+func stringLiteralSet(t ir.Type) (map[string]bool, bool) {
+	if t.IsStringLiteral() {
+		return map[string]bool{t.StringValue(): true}, true
+	}
+	if t.K != "union" || len(t.Types) == 0 {
+		return nil, false
+	}
+	set := make(map[string]bool, len(t.Types))
+	for i := range t.Types {
+		if !t.Types[i].IsStringLiteral() {
+			return nil, false
+		}
+		set[t.Types[i].StringValue()] = true
+	}
+	return set, true
 }
 
 // resolveUnionMembers implements tmp/06-codegen-spec.md 2.1 item 5: when
@@ -172,6 +240,22 @@ func resolveUnionMembers(declByName map[string]*ir.Decl, types []ir.Type, depth 
 			m := entries[0]
 			m.Optional = anyOptional(entries)
 			out = append(out, m)
+		case presentEverywhere && allMembersStringy(entries):
+			// Same field, differently-typed-but-compatible across
+			// branches (a plain string in one branch, a string literal
+			// in another — e.g. ImageInfoResponse's two-branch "format":
+			// "image/svg+xml" | { format: string, ... } — mirroring
+			// unionConv's own string/string-literal mixing rule at the
+			// per-field level).
+			m := entries[0]
+			m.Type = &ir.Type{K: "prim", Name: "string"}
+			m.Optional = anyOptional(entries)
+			out = append(out, m)
+		case presentEverywhere && allMembersNumbery(entries):
+			m := entries[0]
+			m.Type = &ir.Type{K: "prim", Name: "number"}
+			m.Optional = anyOptional(entries)
+			out = append(out, m)
 		case presentEverywhere:
 			// Same field, incompatible types across branches: not
 			// representable as one merged field.
@@ -183,6 +267,32 @@ func resolveUnionMembers(declByName map[string]*ir.Decl, types []ir.Type, depth 
 		}
 	}
 	return out, true
+}
+
+// allMembersStringy/allMembersNumbery adapt unionConv's allStringy/
+// allNumbery (types.go) — which operate on a union's own branch types — to
+// resolveUnionMembers' per-field entries (one Member per branch that
+// declares this field), for the field-merge compatibility check above.
+func allMembersStringy(entries []ir.Member) bool {
+	types := make([]ir.Type, len(entries))
+	for i, m := range entries {
+		if m.Type == nil {
+			return false
+		}
+		types[i] = *m.Type
+	}
+	return allStringy(types)
+}
+
+func allMembersNumbery(entries []ir.Member) bool {
+	types := make([]ir.Type, len(entries))
+	for i, m := range entries {
+		if m.Type == nil {
+			return false
+		}
+		types[i] = *m.Type
+	}
+	return allNumbery(types)
 }
 
 // allBooleanish reports whether every member's type is a boolean literal

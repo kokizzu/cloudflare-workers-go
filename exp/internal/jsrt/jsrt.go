@@ -68,6 +68,20 @@ func NewObject() js.Value {
 	return jsutil.NewObject()
 }
 
+// AsyncFunc builds a JS-callable js.Func that returns a Promise when
+// invoked: handler runs in a new goroutine, and a non-nil error rejects the
+// Promise while a nil error resolves it with the returned js.Value. The
+// caller must Release the returned js.Func once it's no longer needed (e.g.
+// once the JS call it was passed to has settled).
+//
+// Generated bindings use this for a method whose only parameter is a
+// callback of TypeScript shape "(a: A) => Promise<U>" / "() => Promise<U>"
+// (tmp/06-codegen-spec.md 5.1 item 5), such as DurableObjectStorage.
+// Transaction and DurableObjectState.BlockConcurrencyWhile.
+func AsyncFunc(handler func(args []js.Value) (js.Value, error)) js.Func {
+	return jsutil.AsyncFunc(handler)
+}
+
 // RuntimeContextValue reads key directly off the runtime context object
 // passed in from the JS side (env/ctx/binding, plus whatever a runtime
 // shim under cmd/workers-assets-gen/assets/runtime/*.mjs adds to

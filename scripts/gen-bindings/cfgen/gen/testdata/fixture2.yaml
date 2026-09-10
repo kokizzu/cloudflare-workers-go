@@ -19,6 +19,11 @@ types:
   # included data declaration here should still trigger the nested-data
   # pointer rule, same as if the field's own IR type were a plain ref.
   Config.altBox: Box
+typeParams:
+  # tmp/06-codegen-spec.md 5.1 item 3: Store.get's overload-2 method
+  # typeParam Encoding has no TS default (so would otherwise silently fall
+  # back to js.Value); pin it to string instead, and document why.
+  Store.Encoding: string
 overloads:
   Store.get:
     - { index: 1, name: GetText, literal: text }

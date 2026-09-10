@@ -44,18 +44,22 @@ func (x *Store) GetText(key string) (*string, error) {
 	return ret, nil
 }
 
-// GetEncoded overload 2, configured as GetEncoded, exercising a method-level typeParam default (Encoding has no default -> js.Value) and dropping the literal "encoded" kind param
-func (x *Store) GetEncoded(key string) (js.Value, error) {
+// GetEncoded overload 2, configured as GetEncoded, exercising a method-level typeParam override (Encoding has no default, overridden to string via typeParams:) and dropping the literal "encoded" kind param
+func (x *Store) GetEncoded(key string) (*string, error) {
 	p, err := jsrt.Call(x.v, "get", key, "encoded")
 	if err != nil {
-		return js.Undefined(), err
+		return nil, err
 	}
 	r, err := jsrt.Await(p)
 	if err != nil {
-		return js.Undefined(), err
+		return nil, err
 	}
-	var ret js.Value
-	ret = r
+	var ret *string
+	if !jsrt.IsNil(r) {
+		var val string
+		val = r.String()
+		ret = &val
+	}
 	return ret, nil
 }
 

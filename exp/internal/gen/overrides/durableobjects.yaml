@@ -27,6 +27,7 @@ include:
   - SqlStorage
   - SqlStorageCursor
   - AlarmInvocationInfo
+  - DurableObjectTransaction
 bindings:
   - DurableObjectNamespace
 rename:
@@ -49,10 +50,29 @@ types:
   # the Date side explicitly (jsrt.TimeToDate always emits a Date, which the
   # runtime accepts).
   DurableObjectStorage.setAlarm.params.scheduledTime: time.Time
+  DurableObjectTransaction.setAlarm.params.scheduledTime: time.Time
+  # DurableObjectStub (DurableObjectNamespace.Get/GetByName's return type)
+  # is Fetcher<T, ...> & {id, name}: an RPC-branded intersection cfgen
+  # can't flatten (Fetcher is a generic handle type, not a data shape).
+  # cloudflare/dostub.go's hand-written DurableObjectStub already covers
+  # this at L2 (a future load-bearing rewrite may delegate its internals
+  # to this L1 package, per tmp/06-codegen-spec.md 5.2 item 2); left as
+  # js.Value here in the meantime.
+  DurableObjectNamespace.get.returns: js.Value
+  DurableObjectNamespace.getByName.returns: js.Value
+typeParams:
+  # tmp/06-codegen-spec.md 5.1 item 3: T has no default on any of
+  # DurableObjectStorage's generic methods (get/put/getMultiple/
+  # transaction/...), so it already falls back to js.Value silently; this
+  # documents that as an intentional choice (the spec's own example
+  # override).
+  DurableObjectStorage.T: js.Value
 overloads:
   # get/put/delete are each overloaded on single-key vs. multi-key; unlike
   # every other generated package (which picks one overload and skips the
   # rest), both are wanted here under distinct names.
+  # DurableObjectTransaction (transaction's callback parameter type)
+  # mirrors DurableObjectStorage's own get/put/delete overloads.
   DurableObjectStorage.get:
     - { index: 0, name: Get }
     - { index: 1, name: GetMultiple }
@@ -62,8 +82,19 @@ overloads:
   DurableObjectStorage.delete:
     - { index: 0, name: Delete }
     - { index: 1, name: DeleteMultiple }
+  DurableObjectTransaction.get:
+    - { index: 0, name: Get }
+    - { index: 1, name: GetMultiple }
+  DurableObjectTransaction.put:
+    - { index: 0, name: Put }
+    - { index: 1, name: PutMultiple }
+  DurableObjectTransaction.delete:
+    - { index: 0, name: Delete }
+    - { index: 1, name: DeleteMultiple }
 exclude:
-  - DurableObjectState.blockConcurrencyWhile
+  # blockConcurrencyWhile's callback parameter "() => Promise<T>" is now
+  # generated (tmp/06-codegen-spec.md 5.1 item 5's callback-method
+  # support), not excluded.
   - DurableObjectState.exports
   - DurableObjectState.props
   - DurableObjectState.container
@@ -73,7 +104,11 @@ exclude:
   - DurableObjectState.getWebSocketAutoResponseTimestamp
   - DurableObjectState.setHibernatableWebSocketEventTimeout
   - DurableObjectState.getHibernatableWebSocketEventTimeout
-  - DurableObjectStorage.transaction
+  # transaction's "(txn: DurableObjectTransaction) => Promise<T>" callback
+  # parameter is now generated (item 5), not excluded. transactionSync's
+  # callback ("() => T", not "() => Promise<T>") isn't matched by the
+  # callback-method rule (its return isn't itself a Promise), so it's left
+  # excluded — a sync-callback equivalent is a possible future addition.
   - DurableObjectStorage.transactionSync
   - DurableObjectStorage.kv
   - DurableObjectStorage.getCurrentBookmark

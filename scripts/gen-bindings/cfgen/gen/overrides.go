@@ -26,12 +26,22 @@ type OverloadEntry struct {
 
 // Overrides is the decoded form of exp/internal/gen/overrides/<pkg>.yaml.
 type Overrides struct {
-	Package     string                     `yaml:"package"`
-	Doc         string                     `yaml:"doc"`
-	Include     []string                   `yaml:"include"`
-	Bindings    []string                   `yaml:"bindings"`
-	Rename      map[string]string          `yaml:"rename"`
-	Types       map[string]string          `yaml:"types"`
+	Package  string            `yaml:"package"`
+	Doc      string            `yaml:"doc"`
+	Include  []string          `yaml:"include"`
+	Bindings []string          `yaml:"bindings"`
+	Rename   map[string]string `yaml:"rename"`
+	Types    map[string]string `yaml:"types"`
+	// TypeParams overrides the Go type chosen for a declaration's type
+	// parameter that would otherwise (with no resolvable default) fall
+	// back to js.Value, keyed "Decl.Param" (tmp/06-codegen-spec.md 5.1
+	// item 3). The value is a "types:"-style Go type spelling. Both an
+	// override here and a default-less type parameter with no override
+	// fall back silently (no warning): generics erasure at this boundary
+	// is expected, not a fixable gap — the override exists to make the
+	// resulting js.Value (or other chosen type) an intentional,
+	// documented choice rather than an implicit one.
+	TypeParams  map[string]string          `yaml:"typeParams"`
 	Overloads   map[string][]OverloadEntry `yaml:"overloads"`
 	Handwritten []string                   `yaml:"handwritten"`
 	Exclude     []string                   `yaml:"exclude"`
@@ -140,6 +150,20 @@ func (o *Overrides) Validate(doc *ir.IR) error {
 			return err
 		}
 	}
+	for k := range o.TypeParams {
+		parts := strings.SplitN(k, ".", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("%s: typeParams: %q is not a \"Decl.Param\" key", o.Path, k)
+		}
+		declName, paramName := parts[0], parts[1]
+		d, ok := included[declName]
+		if !ok {
+			return fmt.Errorf("%s: typeParams: %q refers to declaration %q which is not in include", o.Path, k, declName)
+		}
+		if !declOrMethodHasTypeParam(d, paramName) {
+			return fmt.Errorf("%s: typeParams: %q refers to type parameter %q which is not declared on %q or any of its methods", o.Path, k, paramName, declName)
+		}
+	}
 	for k, entries := range o.Overloads {
 		if err := checkDeclMember(k); err != nil {
 			return err
@@ -223,6 +247,25 @@ func declHasMember(declByName map[string]*ir.Decl, d *ir.Decl, name string) bool
 	for _, m := range resolveHandleMembers(declByName, d, 0) {
 		if m.Name == name {
 			return true
+		}
+	}
+	return false
+}
+
+// declOrMethodHasTypeParam reports whether paramName is a type parameter of
+// d itself, or of any of d's own method/getter members (mirroring
+// typeParamDefault's decl/method scoping).
+func declOrMethodHasTypeParam(d *ir.Decl, paramName string) bool {
+	for _, tp := range d.TypeParams {
+		if tp.Name == paramName {
+			return true
+		}
+	}
+	for _, m := range d.Members {
+		for _, tp := range m.TypeParams {
+			if tp.Name == paramName {
+				return true
+			}
 		}
 	}
 	return false

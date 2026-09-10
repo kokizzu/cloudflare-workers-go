@@ -48,6 +48,29 @@ func (x *DurableObjectState) Storage() *DurableObjectStorage {
 	return ret
 }
 
+// BlockConcurrencyWhile
+func (x *DurableObjectState) BlockConcurrencyWhile(callback func() (js.Value, error)) (js.Value, error) {
+	cb := jsrt.AsyncFunc(func(cbArgs []js.Value) (js.Value, error) {
+		result, err := callback()
+		if err != nil {
+			return js.Value{}, err
+		}
+		return result, nil
+	})
+	defer cb.Release()
+	p, err := jsrt.Call(x.v, "blockConcurrencyWhile", cb)
+	if err != nil {
+		return js.Undefined(), err
+	}
+	r, err := jsrt.Await(p)
+	if err != nil {
+		return js.Undefined(), err
+	}
+	var ret js.Value
+	ret = r
+	return ret, nil
+}
+
 // AcceptWebSocket
 func (x *DurableObjectState) AcceptWebSocket(ws js.Value, tags []string) error {
 	var arg1 js.Value
@@ -246,6 +269,31 @@ func (x *DurableObjectStorage) DeleteAll(options DurableObjectPutOptions) error 
 	}
 	_, err = jsrt.Await(p)
 	return err
+}
+
+// Transaction
+func (x *DurableObjectStorage) Transaction(closure func(*DurableObjectTransaction) (js.Value, error)) (js.Value, error) {
+	cb := jsrt.AsyncFunc(func(cbArgs []js.Value) (js.Value, error) {
+		var a0 *DurableObjectTransaction
+		a0 = DurableObjectTransactionFromJS(cbArgs[0])
+		result, err := closure(a0)
+		if err != nil {
+			return js.Value{}, err
+		}
+		return result, nil
+	})
+	defer cb.Release()
+	p, err := jsrt.Call(x.v, "transaction", cb)
+	if err != nil {
+		return js.Undefined(), err
+	}
+	r, err := jsrt.Await(p)
+	if err != nil {
+		return js.Undefined(), err
+	}
+	var ret js.Value
+	ret = r
+	return ret, nil
 }
 
 // GetAlarm
@@ -879,4 +927,193 @@ func (o AlarmInvocationInfo) toJS() js.Value {
 		obj.Set("scheduledTime", o.ScheduledTime)
 	}
 	return obj
+}
+
+// DurableObjectTransaction
+type DurableObjectTransaction struct{ v js.Value }
+
+// DurableObjectTransactionFromJS wraps a JS DurableObjectTransaction value.
+func DurableObjectTransactionFromJS(v js.Value) *DurableObjectTransaction {
+	return &DurableObjectTransaction{v: v}
+}
+
+// JSValue returns the underlying JS value.
+func (x *DurableObjectTransaction) JSValue() js.Value { return x.v }
+
+// Get
+func (x *DurableObjectTransaction) Get(key string, options DurableObjectGetOptions) (js.Value, error) {
+	p, err := jsrt.Call(x.v, "get", key, options.toJS())
+	if err != nil {
+		return js.Undefined(), err
+	}
+	r, err := jsrt.Await(p)
+	if err != nil {
+		return js.Undefined(), err
+	}
+	var ret js.Value
+	ret = r
+	return ret, nil
+}
+
+// GetMultiple
+func (x *DurableObjectTransaction) GetMultiple(keys []string, options DurableObjectGetOptions) (map[string]js.Value, error) {
+	var arg0 js.Value
+	{
+		arr := js.Global().Get("Array").New(len(keys))
+		for i, e := range keys {
+			arr.SetIndex(i, e)
+		}
+		arg0 = arr
+	}
+	p, err := jsrt.Call(x.v, "get", arg0, options.toJS())
+	if err != nil {
+		return nil, err
+	}
+	r, err := jsrt.Await(p)
+	if err != nil {
+		return nil, err
+	}
+	var ret map[string]js.Value
+	ret = make(map[string]js.Value)
+	mapKeys := js.Global().Get("Array").Call("from", r.Call("keys"))
+	for mapIdx := 0; mapIdx < mapKeys.Length(); mapIdx++ {
+		mapKey := mapKeys.Index(mapIdx).String()
+		var mapVal js.Value
+		mapVal = r.Call("get", mapKey)
+		ret[mapKey] = mapVal
+	}
+	return ret, nil
+}
+
+// List
+func (x *DurableObjectTransaction) List(options DurableObjectListOptions) (map[string]js.Value, error) {
+	p, err := jsrt.Call(x.v, "list", options.toJS())
+	if err != nil {
+		return nil, err
+	}
+	r, err := jsrt.Await(p)
+	if err != nil {
+		return nil, err
+	}
+	var ret map[string]js.Value
+	ret = make(map[string]js.Value)
+	mapKeys := js.Global().Get("Array").Call("from", r.Call("keys"))
+	for mapIdx := 0; mapIdx < mapKeys.Length(); mapIdx++ {
+		mapKey := mapKeys.Index(mapIdx).String()
+		var mapVal js.Value
+		mapVal = r.Call("get", mapKey)
+		ret[mapKey] = mapVal
+	}
+	return ret, nil
+}
+
+// Put
+func (x *DurableObjectTransaction) Put(key string, value js.Value, options DurableObjectPutOptions) error {
+	p, err := jsrt.Call(x.v, "put", key, value, options.toJS())
+	if err != nil {
+		return err
+	}
+	_, err = jsrt.Await(p)
+	return err
+}
+
+// PutMultiple
+func (x *DurableObjectTransaction) PutMultiple(entries map[string]js.Value, options DurableObjectPutOptions) error {
+	var arg0 js.Value
+	{
+		m := jsrt.NewObject()
+		for k, v := range entries {
+			m.Set(k, v)
+		}
+		arg0 = m
+	}
+	p, err := jsrt.Call(x.v, "put", arg0, options.toJS())
+	if err != nil {
+		return err
+	}
+	_, err = jsrt.Await(p)
+	return err
+}
+
+// Delete
+func (x *DurableObjectTransaction) Delete(key string, options DurableObjectPutOptions) (bool, error) {
+	p, err := jsrt.Call(x.v, "delete", key, options.toJS())
+	if err != nil {
+		return false, err
+	}
+	r, err := jsrt.Await(p)
+	if err != nil {
+		return false, err
+	}
+	var ret bool
+	ret = r.Bool()
+	return ret, nil
+}
+
+// DeleteMultiple
+func (x *DurableObjectTransaction) DeleteMultiple(keys []string, options DurableObjectPutOptions) (float64, error) {
+	var arg0 js.Value
+	{
+		arr := js.Global().Get("Array").New(len(keys))
+		for i, e := range keys {
+			arr.SetIndex(i, e)
+		}
+		arg0 = arr
+	}
+	p, err := jsrt.Call(x.v, "delete", arg0, options.toJS())
+	if err != nil {
+		return 0, err
+	}
+	r, err := jsrt.Await(p)
+	if err != nil {
+		return 0, err
+	}
+	var ret float64
+	ret = r.Float()
+	return ret, nil
+}
+
+// Rollback
+func (x *DurableObjectTransaction) Rollback() error {
+	_, err := jsrt.Call(x.v, "rollback")
+	return err
+}
+
+// GetAlarm
+func (x *DurableObjectTransaction) GetAlarm(options DurableObjectGetAlarmOptions) (*float64, error) {
+	p, err := jsrt.Call(x.v, "getAlarm", options.toJS())
+	if err != nil {
+		return nil, err
+	}
+	r, err := jsrt.Await(p)
+	if err != nil {
+		return nil, err
+	}
+	var ret *float64
+	if !jsrt.IsNil(r) {
+		var val float64
+		val = r.Float()
+		ret = &val
+	}
+	return ret, nil
+}
+
+// SetAlarm
+func (x *DurableObjectTransaction) SetAlarm(scheduledTime time.Time, options DurableObjectSetAlarmOptions) error {
+	p, err := jsrt.Call(x.v, "setAlarm", jsrt.TimeToDate(scheduledTime), options.toJS())
+	if err != nil {
+		return err
+	}
+	_, err = jsrt.Await(p)
+	return err
+}
+
+// DeleteAlarm
+func (x *DurableObjectTransaction) DeleteAlarm(options DurableObjectSetAlarmOptions) error {
+	p, err := jsrt.Call(x.v, "deleteAlarm", options.toJS())
+	if err != nil {
+		return err
+	}
+	_, err = jsrt.Await(p)
+	return err
 }

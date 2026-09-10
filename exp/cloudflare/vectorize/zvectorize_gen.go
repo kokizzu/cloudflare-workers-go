@@ -366,16 +366,20 @@ func (o VectorizeQueryOptions) toJS() js.Value {
 
 // VectorizeMatches A set of matching {@link VectorizeMatch} for a particular query.
 type VectorizeMatches struct {
-	Matches []js.Value `js:"matches"`
-	Count   float64    `js:"count"`
+	Matches []VectorizeMatch `js:"matches"`
+	Count   float64          `js:"count"`
 }
 
 func vectorizeMatchesFromJS(v js.Value) (VectorizeMatches, error) {
 	var out VectorizeMatches
 	{
-		out.Matches = make([]js.Value, v.Get("matches").Length())
+		out.Matches = make([]VectorizeMatch, v.Get("matches").Length())
 		for i := range out.Matches {
-			out.Matches[i] = v.Get("matches").Index(i)
+			if tmp, err := vectorizeMatchFromJS(v.Get("matches").Index(i)); err != nil {
+				return VectorizeMatches{}, err
+			} else {
+				out.Matches[i] = tmp
+			}
 		}
 	}
 	{
@@ -389,7 +393,7 @@ func (o VectorizeMatches) toJS() js.Value {
 	if len(o.Matches) > 0 {
 		arr := js.Global().Get("Array").New(len(o.Matches))
 		for i, e := range o.Matches {
-			arr.SetIndex(i, e)
+			arr.SetIndex(i, e.toJS())
 		}
 		obj.Set("matches", arr)
 	}
@@ -400,7 +404,80 @@ func (o VectorizeMatches) toJS() js.Value {
 }
 
 // VectorizeMatch Represents a matched vector for a query along with its score and (if specified) the matching vector information.
-type VectorizeMatch = js.Value
+type VectorizeMatch struct {
+	// The vector values
+	Values []float32 `js:"values"`
+	// The ID for the vector. This can be user-defined, and must be unique. It should uniquely identify the object, and is best set based on the ID of what the vector represents.
+	ID string `js:"id"`
+	// The namespace this vector belongs to.
+	Namespace string `js:"namespace"`
+	// Metadata associated with the vector. Includes the values of other fields and potentially additional details.
+	Metadata map[string]any `js:"metadata"`
+	// The score or rank for similarity, when returned as a result
+	Score float64 `js:"score"`
+}
+
+func vectorizeMatchFromJS(v js.Value) (VectorizeMatch, error) {
+	var out VectorizeMatch
+	{
+		if s := v.Get("values"); !s.IsUndefined() && !s.IsNull() {
+			out.Values = make([]float32, s.Length())
+			for i := range out.Values {
+				out.Values[i] = float32(s.Index(i).Float())
+			}
+		}
+	}
+	{
+		out.ID = v.Get("id").String()
+	}
+	{
+		if s := v.Get("namespace"); !s.IsUndefined() && !s.IsNull() {
+			out.Namespace = s.String()
+		}
+	}
+	{
+		if s := v.Get("metadata"); !s.IsUndefined() && !s.IsNull() {
+			out.Metadata = make(map[string]any)
+			keys := js.Global().Get("Object").Call("keys", s)
+			for i := 0; i < keys.Length(); i++ {
+				k := keys.Index(i).String()
+				out.Metadata[k] = s.Get(k)
+			}
+		}
+	}
+	{
+		out.Score = v.Get("score").Float()
+	}
+	return out, nil
+}
+
+func (o VectorizeMatch) toJS() js.Value {
+	obj := jsrt.NewObject()
+	if len(o.Values) > 0 {
+		arr := js.Global().Get("Array").New(len(o.Values))
+		for i, e := range o.Values {
+			arr.SetIndex(i, e)
+		}
+		obj.Set("values", arr)
+	}
+	if o.ID != "" {
+		obj.Set("id", o.ID)
+	}
+	if o.Namespace != "" {
+		obj.Set("namespace", o.Namespace)
+	}
+	if len(o.Metadata) > 0 {
+		m := jsrt.NewObject()
+		for k, v := range o.Metadata {
+			m.Set(k, v)
+		}
+		obj.Set("metadata", m)
+	}
+	if o.Score != 0 {
+		obj.Set("score", o.Score)
+	}
+	return obj
+}
 
 // VectorizeVectorMutation Results of an operation that performed a mutation on a set of vectors.
 // Here, `ids` is a list of vectors that were successfully processed.

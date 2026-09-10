@@ -1,0 +1,358 @@
+{
+  "source": {
+    "package": "@cloudflare/workers-types",
+    "version": "0.0.0-fixture6",
+    "entry": "index.d.ts"
+  },
+  "decls": [
+    {
+      "kind": "interface",
+      "name": "KnownMeta",
+      "module": "",
+      "doc": "",
+      "typeParams": [],
+      "extends": [],
+      "members": [
+        {
+          "kind": "property",
+          "name": "kind",
+          "doc": "",
+          "type": {
+            "k": "prim",
+            "name": "string"
+          },
+          "optional": false,
+          "readonly": false
+        }
+      ]
+    },
+    {
+      "kind": "interface",
+      "name": "UnknownExternal",
+      "module": "",
+      "doc": "",
+      "typeParams": [],
+      "extends": [],
+      "members": [
+        {
+          "kind": "property",
+          "name": "raw",
+          "doc": "",
+          "type": {
+            "k": "prim",
+            "name": "string"
+          },
+          "optional": false,
+          "readonly": false
+        },
+        {
+          "kind": "method",
+          "name": "run",
+          "doc": "",
+          "params": [],
+          "returns": {
+            "k": "prim",
+            "name": "void"
+          },
+          "typeParams": []
+        }
+      ]
+    },
+    {
+      "kind": "interface",
+      "name": "Config",
+      "module": "",
+      "doc": "Config exercises tmp/06-codegen-spec.md 5.1 items 1 and 2: an inline object field, an inline object-literal union field, a ref union resolved via the single-included-ref rule, a numeric literal union, a boolean/literal mix, and a string/literal mix.",
+      "typeParams": [],
+      "extends": [],
+      "members": [
+        {
+          "kind": "property",
+          "name": "retention",
+          "doc": "",
+          "type": {
+            "k": "object",
+            "members": [
+              {
+                "kind": "property",
+                "name": "days",
+                "doc": "",
+                "type": {
+                  "k": "prim",
+                  "name": "number"
+                },
+                "optional": false,
+                "readonly": false
+              },
+              {
+                "kind": "property",
+                "name": "mode",
+                "doc": "",
+                "type": {
+                  "k": "union",
+                  "types": [
+                    {
+                      "k": "literal",
+                      "value": "auto"
+                    },
+                    {
+                      "k": "literal",
+                      "value": "manual"
+                    }
+                  ]
+                },
+                "optional": false,
+                "readonly": false
+              }
+            ]
+          },
+          "optional": false,
+          "readonly": false
+        },
+        {
+          "kind": "property",
+          "name": "range",
+          "doc": "",
+          "type": {
+            "k": "union",
+            "types": [
+              {
+                "k": "object",
+                "members": [
+                  {
+                    "kind": "property",
+                    "name": "start",
+                    "doc": "",
+                    "type": {
+                      "k": "prim",
+                      "name": "number"
+                    },
+                    "optional": false,
+                    "readonly": false
+                  },
+                  {
+                    "kind": "property",
+                    "name": "end",
+                    "doc": "",
+                    "type": {
+                      "k": "prim",
+                      "name": "number"
+                    },
+                    "optional": false,
+                    "readonly": false
+                  }
+                ]
+              },
+              {
+                "k": "object",
+                "members": [
+                  {
+                    "kind": "property",
+                    "name": "start",
+                    "doc": "",
+                    "type": {
+                      "k": "prim",
+                      "name": "number"
+                    },
+                    "optional": false,
+                    "readonly": false
+                  }
+                ]
+              }
+            ]
+          },
+          "optional": false,
+          "readonly": false
+        },
+        {
+          "kind": "property",
+          "name": "meta",
+          "doc": "",
+          "type": {
+            "k": "union",
+            "types": [
+              {
+                "k": "ref",
+                "name": "KnownMeta",
+                "args": []
+              },
+              {
+                "k": "ref",
+                "name": "UnknownExternal",
+                "args": []
+              }
+            ]
+          },
+          "optional": false,
+          "readonly": false
+        },
+        {
+          "kind": "property",
+          "name": "level",
+          "doc": "",
+          "type": {
+            "k": "union",
+            "types": [
+              {
+                "k": "literal",
+                "value": 1.0
+              },
+              {
+                "k": "literal",
+                "value": 2.0
+              },
+              {
+                "k": "literal",
+                "value": 3.0
+              }
+            ]
+          },
+          "optional": false,
+          "readonly": false
+        },
+        {
+          "kind": "property",
+          "name": "enabled",
+          "doc": "",
+          "type": {
+            "k": "union",
+            "types": [
+              {
+                "k": "literal",
+                "value": true
+              },
+              {
+                "k": "literal",
+                "value": false
+              }
+            ]
+          },
+          "optional": false,
+          "readonly": false
+        },
+        {
+          "kind": "property",
+          "name": "label",
+          "doc": "",
+          "type": {
+            "k": "union",
+            "types": [
+              {
+                "k": "prim",
+                "name": "string"
+              },
+              {
+                "k": "literal",
+                "value": "auto"
+              }
+            ]
+          },
+          "optional": false,
+          "readonly": false
+        }
+      ]
+    },
+    {
+      "kind": "interface",
+      "name": "Catalog",
+      "module": "",
+      "doc": "Catalog exercises inline object type literals at getter and method param/return positions.",
+      "typeParams": [],
+      "extends": [],
+      "members": [
+        {
+          "kind": "getter",
+          "name": "info",
+          "doc": "",
+          "type": {
+            "k": "object",
+            "members": [
+              {
+                "kind": "property",
+                "name": "name",
+                "doc": "",
+                "type": {
+                  "k": "prim",
+                  "name": "string"
+                },
+                "optional": false,
+                "readonly": false
+              }
+            ]
+          }
+        },
+        {
+          "kind": "method",
+          "name": "search",
+          "doc": "",
+          "params": [
+            {
+              "name": "query",
+              "type": {
+                "k": "prim",
+                "name": "string"
+              },
+              "optional": false,
+              "rest": false
+            },
+            {
+              "name": "filter",
+              "type": {
+                "k": "object",
+                "members": [
+                  {
+                    "kind": "property",
+                    "name": "tag",
+                    "doc": "",
+                    "type": {
+                      "k": "prim",
+                      "name": "string"
+                    },
+                    "optional": false,
+                    "readonly": false
+                  }
+                ]
+              },
+              "optional": false,
+              "rest": false
+            }
+          ],
+          "returns": {
+            "k": "ref",
+            "name": "Promise",
+            "args": [
+              {
+                "k": "object",
+                "members": [
+                  {
+                    "kind": "property",
+                    "name": "id",
+                    "doc": "",
+                    "type": {
+                      "k": "prim",
+                      "name": "string"
+                    },
+                    "optional": false,
+                    "readonly": false
+                  },
+                  {
+                    "kind": "property",
+                    "name": "count",
+                    "doc": "",
+                    "type": {
+                      "k": "prim",
+                      "name": "number"
+                    },
+                    "optional": false,
+                    "readonly": false
+                  }
+                ]
+              }
+            ]
+          },
+          "typeParams": []
+        }
+      ]
+    }
+  ]
+}

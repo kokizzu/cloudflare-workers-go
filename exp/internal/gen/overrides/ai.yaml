@@ -57,6 +57,10 @@ include:
   - AiModelsSearchParams
   - AiModelsSearchObject
   - UsageTags
+  - GatewayOptions
+  - GatewayRetries
+  - AiTextGenerationResponseFormat
+  - AiTextGenerationFunctionsInput
 bindings:
   - Ai
 rename:
@@ -68,9 +72,31 @@ rename:
   AiTextEmbeddingsOutput: AiTextEmbeddingsOutput
   AiModelsSearchParams: AiModelsSearchParams
   AiModelsSearchObject: AiModelsSearchObject
+  AiTextGenerationResponseFormat: AiTextGenerationResponseFormat
+  AiTextGenerationFunctionsInput: AiTextGenerationFunctionsInput
 types:
   RoleScopedChatInput.role: "string"
   AiTextEmbeddingsInput.text: "[]string"
+  # signal is a DOM AbortSignal (fetch-style cancellation); not a
+  # Cloudflare data type and not otherwise supported by jsrt, so left as a
+  # raw escape hatch.
+  AiOptions.signal: "js.Value"
+  # tools is (AiTextGenerationToolInput[] | AiTextGenerationToolLegacyInput[]
+  # | (object & NonNullable<unknown>)) — three structurally unrelated
+  # shapes (two different array-element types plus a TS "object that isn't
+  # null/undefined" idiom), not coverable by any union rule.
+  AiTextGenerationInput.tools: "js.Value"
+  # tool_calls is (AiTextGenerationToolLegacyOutput[] &
+  # AiTextGenerationToolOutput[]): an intersection of two *different*
+  # array-element types, which resolveDataMembers can't flatten (arrays
+  # aren't data-shaped operands) — an artifact of how the upstream .d.ts
+  # encodes "whichever tool-call shape the model actually returned".
+  AiTextGenerationOutput.tool_calls: "js.Value"
+  # metadata is Record<string, number | string | boolean | null | bigint>:
+  # a genuinely heterogeneous value type (mixing several different
+  # primitive kinds, not just literals of one kind), same precedent as
+  # vectorize.yaml's VectorizeVector.metadata/VectorizeQueryOptions.filter.
+  GatewayOptions.metadata: "map[string]any"
 handwritten:
   - Ai.run
 exclude:

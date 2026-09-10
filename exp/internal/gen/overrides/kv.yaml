@@ -14,6 +14,19 @@ doc: |
   variants return js.Value rather than a decoded value, since the JSON
   shape is caller-defined (KVNamespace<Key>'s "get<ExpectedValue>(...,
   "json")" generic has no default to map to a concrete Go type).
+
+  KVNamespace.get/getWithMetadata each have several more overloads left
+  unconfigured (skipped, with a warning): indices 0-4 are the plain-literal-
+  argument / bare-Partial<options> forms superseded by the options-object
+  ones this package already exposes (5-8), and indices 9-11 are the bulk
+  (Array<Key>) arrayBuffer/stream/plain-literal-text forms — get's own
+  options-object bulk forms (12-13) are exposed as GetTextMultiple/
+  GetJSONMultiple (5.1 item 6), but a bulk fetch of raw bytes or streams has
+  little value over calling GetBytes/GetStream per key, so those aren't
+  added. getWithMetadata has no such Map-returning bulk form in the .d.ts
+  source at all (its own indices 9-13 are just its bare-Partial<options>/
+  array-key text/json forms without metadata) — its own bulk-with-metadata
+  equivalent is left for a future addition.
 include:
   - KVNamespace
   - KVNamespaceGetOptions
@@ -38,14 +51,29 @@ types:
   # L2 kv package (which this is meant to be wrapped by) is responsible for
   # accepting a string/[]byte/io.Reader and producing the right JS value.
   KVNamespace.put.params.value: "js.Value"
+typeParams:
+  # tmp/06-codegen-spec.md 5.1 item 3's own example: Metadata has no
+  # default, so it already falls back to js.Value silently; this documents
+  # that as intentional (the list-with-metadata result's Metadata field is
+  # caller-defined, same rationale as get's "json" variant returning
+  # js.Value).
+  KVNamespaceListKey.Metadata: js.Value
 overloads:
   # Indices 5-8 are the KVNamespaceGetOptions<"type"> overloads (the plain
   # literal-argument overloads at indices 1-4 don't carry cacheTtl).
+  # Indices 12-13 are their bulk-get (Array<Key> + options) counterparts,
+  # returning Map<string, T | null> (mapConv's nullableReturnConv wrap
+  # handles the per-entry null, tmp/06-codegen-spec.md 5.1 item 6);
+  # GetBytesMultiple/GetStreamMultiple aren't added since a bulk fetch of
+  # raw bytes or streams has little value over calling GetBytes/GetStream
+  # per key.
   KVNamespace.get:
     - { index: 5, name: GetText }
     - { index: 6, name: GetJSON }
     - { index: 7, name: GetBytes }
     - { index: 8, name: GetStream }
+    - { index: 12, name: GetTextMultiple }
+    - { index: 13, name: GetJSONMultiple }
   KVNamespace.getWithMetadata:
     - { index: 5, name: GetTextWithMetadata }
     - { index: 6, name: GetJSONWithMetadata }

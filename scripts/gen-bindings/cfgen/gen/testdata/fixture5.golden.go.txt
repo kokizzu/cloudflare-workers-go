@@ -90,3 +90,51 @@ func (x *Registry) Tag(name string, values ...string) error {
 	_, err := jsrt.Call(x.v, "tag", append([]any{name}, arg1...)...)
 	return err
 }
+
+// GetAllOrNull a Map<string, string | null> return becomes map[string]*string (tmp/06-codegen-spec.md 5.1 item 6)
+func (x *Registry) GetAllOrNull() (map[string]*string, error) {
+	p, err := jsrt.Call(x.v, "getAllOrNull")
+	if err != nil {
+		return nil, err
+	}
+	r, err := jsrt.Await(p)
+	if err != nil {
+		return nil, err
+	}
+	var ret map[string]*string
+	ret = make(map[string]*string)
+	mapKeys := js.Global().Get("Array").Call("from", r.Call("keys"))
+	for mapIdx := 0; mapIdx < mapKeys.Length(); mapIdx++ {
+		mapKey := mapKeys.Index(mapIdx).String()
+		var mapVal *string
+		if !jsrt.IsNil(r.Call("get", mapKey)) {
+			var val string
+			val = r.Call("get", mapKey).String()
+			mapVal = &val
+		}
+		ret[mapKey] = mapVal
+	}
+	return ret, nil
+}
+
+// GetAllRawOrNull a Map<string, T | null> return with an unresolved typeParam T falls back to map[string]js.Value (item 3's silent typeParam fallback plus item 6's nullableReturnConv, which leaves js.Value untouched since it already round-trips null on its own)
+func (x *Registry) GetAllRawOrNull() (map[string]js.Value, error) {
+	p, err := jsrt.Call(x.v, "getAllRawOrNull")
+	if err != nil {
+		return nil, err
+	}
+	r, err := jsrt.Await(p)
+	if err != nil {
+		return nil, err
+	}
+	var ret map[string]js.Value
+	ret = make(map[string]js.Value)
+	mapKeys := js.Global().Get("Array").Call("from", r.Call("keys"))
+	for mapIdx := 0; mapIdx < mapKeys.Length(); mapIdx++ {
+		mapKey := mapKeys.Index(mapIdx).String()
+		var mapVal js.Value
+		mapVal = r.Call("get", mapKey)
+		ret[mapKey] = mapVal
+	}
+	return ret, nil
+}

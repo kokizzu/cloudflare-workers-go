@@ -94,6 +94,26 @@ type exprConv struct {
 	// "if !s.IsUndefined() && !s.IsNull()" guard (genDataFromJS) can skip
 	// it and call FromJS unconditionally instead.
 	SelfGuarded bool
+
+	// IsDataStruct reports whether this conversion's Go type is a plain
+	// (non-pointer) struct for a data-shaped declaration — set only by
+	// declRefConv's KindData/KindAliasData branch (directly, via a
+	// "types:" override naming an included data declaration, or via
+	// synthesizeDataType for an inline object/union, tmp/06-codegen-spec.md
+	// 5.1 item 1). fieldConv uses it (isDataStructConv) to decide whether
+	// an optional/nullable field of this type should be pointer-wrapped;
+	// it exists as an explicit flag rather than being inferred from
+	// ZeroExpr's shape because a coincidentally-identical-looking
+	// ZeroExpr ("time.Time{}" for dateConv, matching the "<GoType>{}"
+	// pattern declRefConv also happens to use) would otherwise cause a
+	// plain built-in-typed field like R2HTTPMetadata.cacheExpiry
+	// (time.Time) to be misidentified as a nested data struct and
+	// pointer-wrapped into *time.Time — breaking any hand-written L2 code
+	// that assumes the plain (unwrapped) struct-conversion precedent
+	// (e.g. cloudflare/r2's HTTPMetadata(opts.HTTPMetadata) struct-to-
+	// struct Go conversion, which requires both structs' fields to match
+	// exactly).
+	IsDataStruct bool
 }
 
 func scalarConv(goType, fromJS, zero string) exprConv {
@@ -165,6 +185,67 @@ type Package struct {
 	// corrupt) an outer one's index/element/key variable — see
 	// containerSuffix's doc comment.
 	curContainerDepth int
+
+	// curDeclName and curMemberName track which declaration/member is
+	// currently being generated, for two purposes: typeParamOverride's
+	// "Decl.Param" override lookup (tmp/06-codegen-spec.md 5.1 item 3),
+	// and giving warnf-adjacent messages (see refConv's include-list
+	// warnings) enough context to triage without re-deriving it by hand.
+	// curMemberName is "" while resolving a declaration's own shape (e.g.
+	// its extends list) rather than one specific member.
+	curDeclName   string
+	curMemberName string
+
+	// curNameHint is the Go type name to give an inline object type
+	// literal (or an inline union that merges into one), if one is
+	// encountered while resolving the type currently in scope — see
+	// synthesizeDataType and tmp/06-codegen-spec.md 5.1 item 1. Set by
+	// convForNamed/convForParamNamed around a field/param/return type's
+	// own convFor call; propagates unchanged through array/record/union
+	// wrapping so an inline object nested inside those still resolves to
+	// the same name as its immediate field/param/return.
+	curNameHint string
+
+	// synthesized holds the data-shaped declarations manufactured for
+	// inline object type literals / inline data-shaped unions, in
+	// creation order; Generate emits one type for each (see
+	// synthesizeDataType). synthesizedByHint memoizes by curNameHint so
+	// resolving the same field's type more than once (genData's struct
+	// fields vs. its fromJS/toJS bodies all call fieldConv independently)
+	// reuses one synthesized declaration instead of emitting duplicates.
+	synthesized       []*ir.Decl
+	synthesizedByHint map[string]*ir.Decl
+
+	// pendingNotes accumulates notef messages raised while resolving the
+	// type(s) for the field/getter/method currently being emitted (reset
+	// by resetNotes, drained by takeNotes); the caller folds them into
+	// that member's doc comment, per tmp/06-codegen-spec.md 5.1 item 2's
+	// "選ばれた枝を doc comment に書く".
+	pendingNotes []string
+
+	// infos are non-actionable, informational messages (e.g. a union
+	// resolved unambiguously to a single in-include declaration) that are
+	// reported separately from warnings: unlike a warning, they don't
+	// indicate a fallback to js.Value that a human should consider fixing.
+	// infoSeen dedupes infos: a data type's field conversion is resolved
+	// independently up to three times (its struct field, fromJS, and
+	// toJS each call fieldConv), which would otherwise repeat the exact
+	// same notef message that many times.
+	infos    []string
+	infoSeen map[string]bool
+
+	// usedGoNames records every already-resolved declaration's final Go
+	// type name (both real included declarations, populated up front by
+	// NewPackage, and each synthesized one as synthesizeDataType creates
+	// it), so a newly computed name-hint that would collide with an
+	// unrelated existing type can be disambiguated instead of silently
+	// producing two Go declarations with the same name. This does happen
+	// in practice: e.g. cf's flattened IncomingRequestCfProperties.
+	// botManagement field's type, after extends-flattening picks up the
+	// Enterprise variant's inline intersection, hints to the same Go name
+	// ("IncomingRequestCFPropertiesBotManagement") as the already-included
+	// standalone IncomingRequestCfPropertiesBotManagement interface.
+	usedGoNames map[string]bool
 }
 
 // containerSuffix returns the loop/temp-variable name suffix for a
@@ -189,16 +270,22 @@ func containerSuffix(depth int) string {
 
 func NewPackage(doc *ir.IR, ov *Overrides) *Package {
 	p := &Package{
-		IR:         doc,
-		Ov:         ov,
-		declByName: indexDecls(doc),
-		included:   map[string]*ir.Decl{},
-		imports:    map[string]bool{},
+		IR:                doc,
+		Ov:                ov,
+		declByName:        indexDecls(doc),
+		included:          map[string]*ir.Decl{},
+		imports:           map[string]bool{},
+		synthesizedByHint: map[string]*ir.Decl{},
+		infoSeen:          map[string]bool{},
+		usedGoNames:       map[string]bool{},
 	}
 	for _, name := range ov.Include {
 		if d, ok := p.declByName[name]; ok {
 			p.included[name] = d
 		}
+	}
+	for _, d := range p.included {
+		p.usedGoNames[p.declGoName(d)] = true
 	}
 	return p
 }
@@ -207,8 +294,76 @@ func (p *Package) warnf(format string, args ...any) {
 	p.warnings = append(p.warnings, fmt.Sprintf(format, args...))
 }
 
+// warnCtxf is warnf, but prefixed with "Decl" or "Decl.member" context from
+// curDeclName/curMemberName when available (set by genDecl/genGetter/
+// fieldConv/genMethodGroup), so a triage pass over cfgen's warning output
+// doesn't have to re-derive which declaration/member a fallback came from.
+func (p *Package) warnCtxf(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	switch {
+	case p.curDeclName != "" && p.curMemberName != "":
+		msg = p.curDeclName + "." + p.curMemberName + ": " + msg
+	case p.curDeclName != "":
+		msg = p.curDeclName + ": " + msg
+	}
+	p.warnings = append(p.warnings, msg)
+}
+
+// notef records an informational message: something cfgen resolved
+// automatically (e.g. a union with exactly one in-include ref member) that
+// a human doesn't need to act on, as opposed to a warnf fallback to
+// js.Value. It both appends to Infos() (reported separately from
+// Warnings(), so it isn't counted as a warning) and queues onto
+// pendingNotes so the caller can fold it into the affected field/method's
+// generated doc comment.
+func (p *Package) notef(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	if !p.infoSeen[msg] {
+		p.infoSeen[msg] = true
+		p.infos = append(p.infos, msg)
+	}
+	p.pendingNotes = append(p.pendingNotes, msg)
+}
+
+// resetNotes clears pendingNotes; callers emitting one field/getter/method's
+// doc comment call it before resolving that member's type(s), then
+// takeNotes after, so pendingNotes never leaks notes from a previously
+// emitted member into this one's doc comment.
+func (p *Package) resetNotes() { p.pendingNotes = nil }
+
+// takeNotes drains and returns pendingNotes.
+func (p *Package) takeNotes() []string {
+	notes := p.pendingNotes
+	p.pendingNotes = nil
+	return notes
+}
+
+// appendNotesToDoc appends notes (if any) to doc as trailing lines,
+// separated by a blank line from doc's own text.
+func appendNotesToDoc(doc string, notes []string) string {
+	if len(notes) == 0 {
+		return doc
+	}
+	var sb strings.Builder
+	sb.WriteString(doc)
+	if doc != "" {
+		sb.WriteString("\n\n")
+	}
+	for i, n := range notes {
+		if i > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(n)
+	}
+	return sb.String()
+}
+
 // Warnings returns the warnings collected during generation.
 func (p *Package) Warnings() []string { return p.warnings }
+
+// Infos returns the informational (non-warning) messages collected during
+// generation; see notef.
+func (p *Package) Infos() []string { return p.infos }
 
 func (p *Package) useImport(path string) { p.imports[path] = true }
 
@@ -281,11 +436,25 @@ func (p *Package) typeOverride(declName, member, suffix string) string {
 // resolution isn't accidentally left in "param" mode) so refConv can pick
 // the argument-direction mapping for stream types (ReadableStream ->
 // io.Reader, WritableStream -> js.Value) instead of the
-// return/property-direction one.
-func (p *Package) convForParam(t *ir.Type, override string) (exprConv, error) {
+// return/property-direction one. hint is the name to give an inline object
+// type literal encountered while resolving t (tmp/06-codegen-spec.md 5.1
+// item 1); pass "" where none is available (informational-only positions).
+func (p *Package) convForParam(t *ir.Type, override, hint string) (exprConv, error) {
 	prev := p.curInParamPosition
 	p.curInParamPosition = true
-	defer func() { p.curInParamPosition = prev }()
+	prevHint := p.curNameHint
+	p.curNameHint = hint
+	defer func() { p.curInParamPosition = prev; p.curNameHint = prevHint }()
+	return p.convFor(t, override)
+}
+
+// convForNamed is convFor for a property/getter/return type's own type
+// (i.e. not a method parameter): it sets curNameHint the same way
+// convForParam does, without touching curInParamPosition.
+func (p *Package) convForNamed(t *ir.Type, override, hint string) (exprConv, error) {
+	prevHint := p.curNameHint
+	p.curNameHint = hint
+	defer func() { p.curNameHint = prevHint }()
 	return p.convFor(t, override)
 }
 
@@ -313,19 +482,29 @@ func (p *Package) convFor(t *ir.Type, override string) (exprConv, error) {
 	case "union":
 		return p.unionConv(t)
 	case "intersection":
-		p.warnf("intersection types are not supported, falling back to js.Value")
+		if members, ok := resolveDataMembers(p.declByName, &ir.Decl{Kind: "alias", Type: t}); ok {
+			return p.synthesizeDataType(members)
+		}
+		p.warnCtxf("intersection types are not supported, falling back to js.Value")
 		return jsValueConv(), nil
 	case "object":
-		p.warnf("inline object type literals in field position are not supported, falling back to js.Value")
-		return jsValueConv(), nil
+		return p.synthesizeDataType(t.Members)
 	case "function":
-		p.warnf("function types are not supported, falling back to js.Value")
+		p.warnCtxf("function types are not supported, falling back to js.Value")
 		return jsValueConv(), nil
 	case "typeParam":
+		if ov := p.typeParamOverride(t.Name); ov != "" {
+			return p.convForOverride(t, ov)
+		}
+		// A typeParam with no default, or overridden explicitly, falls
+		// back to js.Value silently (tmp/06-codegen-spec.md 5.1 item 3):
+		// generics erasure at this boundary is expected and unavoidable
+		// (a Go method can't itself be generic over the caller's choice
+		// of T the way the TypeScript declaration is), not something a
+		// human needs to act on.
 		if def := p.typeParamDefault(t.Name); def != nil {
 			return p.convFor(def, "")
 		}
-		p.warnf("type parameter %q used outside of a supported context, falling back to js.Value", t.Name)
 		return jsValueConv(), nil
 	case "unsupported":
 		p.warnf("unsupported TypeScript construct %q, falling back to js.Value", t.Text)
@@ -352,6 +531,66 @@ func (p *Package) typeParamDefault(name string) *ir.Type {
 		}
 	}
 	return nil
+}
+
+// typeParamOverride looks up a "typeParams:" override (tmp/06-codegen-spec.md
+// 5.1 item 3) for type parameter name in scope of the declaration currently
+// being generated (curDeclName), keyed "Decl.Param". Returns "" if none is
+// configured.
+func (p *Package) typeParamOverride(name string) string {
+	if p.curDeclName == "" {
+		return ""
+	}
+	return p.Ov.TypeParams[p.curDeclName+"."+name]
+}
+
+// synthesizeDataType manufactures (or, if one was already made for the same
+// curNameHint, reuses) a data-shaped declaration for an inline object type
+// literal or an inline data-shaped union (tmp/06-codegen-spec.md 5.1 item
+// 1), and returns the conversion for it — identical in shape to a
+// convFor("ref"-to-an-included-data-type) conversion. members is the
+// already-flattened/merged property list (from the object literal directly,
+// or from resolveUnionMembers/resolveDataMembers for a union/intersection).
+// If no name hint is in scope (curNameHint == ""; shouldn't happen for any
+// currently generated package, since every call site that can reach an
+// inline object/union sets one), falls back to js.Value with a warning
+// rather than generating an unnamed type.
+func (p *Package) synthesizeDataType(members []ir.Member) (exprConv, error) {
+	hint := p.curNameHint
+	if hint == "" {
+		p.warnCtxf("inline object/union type literal has no name hint in this position, falling back to js.Value")
+		return jsValueConv(), nil
+	}
+	d, ok := p.synthesizedByHint[hint]
+	if !ok {
+		name := p.uniqueSynthesizedName(hint)
+		d = &ir.Decl{Kind: "interface", Name: name, Members: members}
+		// Memoized by the original hint (not the disambiguated name), so
+		// a repeat resolution of the very same field (genData's struct
+		// fields vs. its fromJS/toJS bodies) reuses this declaration
+		// instead of colliding with — and being disambiguated away
+		// from — itself on the second call.
+		p.synthesizedByHint[hint] = d
+		p.included[name] = d
+		p.synthesized = append(p.synthesized, d)
+		p.usedGoNames[p.declGoName(d)] = true
+	}
+	return p.declRefConv(d)
+}
+
+// uniqueSynthesizedName returns hint, or — if hint's own computed Go name
+// collides with an already-used one (see usedGoNames) — hint with a "2",
+// "3", ... suffix appended until the resulting Go name is unique.
+func (p *Package) uniqueSynthesizedName(hint string) string {
+	if !p.usedGoNames[p.declGoName(&ir.Decl{Name: hint})] {
+		return hint
+	}
+	for i := 2; ; i++ {
+		candidate := fmt.Sprintf("%s%d", hint, i)
+		if !p.usedGoNames[p.declGoName(&ir.Decl{Name: candidate})] {
+			return candidate
+		}
+	}
 }
 
 func (p *Package) primConv(name string) exprConv {
@@ -498,10 +737,20 @@ func (p *Package) recordConv(val *ir.Type) (exprConv, error) {
 func (p *Package) mapConv(val *ir.Type) (exprConv, error) {
 	depth := p.curContainerDepth
 	p.curContainerDepth++
-	vc, err := p.convFor(val, "")
+	// tmp/06-codegen-spec.md 5.1 item 6: Map<string, T | null> (e.g. the
+	// KV bulk-get overloads) needs its own "value absent" representation
+	// per entry — a *T for a prim T (nullableReturnConv pointer-wraps
+	// it), or an untouched js.Value when T itself isn't resolvable (a
+	// defaultless type parameter, per item 3) since js.Value already
+	// round-trips null/undefined on its own.
+	target, nullable := splitNullable(val)
+	vc, err := p.convFor(target, "")
 	p.curContainerDepth = depth
 	if err != nil {
 		return exprConv{}, err
+	}
+	if nullable {
+		vc = p.nullableReturnConv(vc)
 	}
 	goType := "map[string]" + vc.GoType
 	suf := containerSuffix(depth)
@@ -756,9 +1005,10 @@ func (p *Package) declRefConv(d *ir.Decl) (exprConv, error) {
 					"}",
 				}
 			},
-			ToJS:       func(src string) ([]string, string) { return nil, src + ".toJS()" },
-			ZeroExpr:   name + "{}",
-			OmitIfZero: func(string) string { return "true" },
+			ToJS:         func(src string) ([]string, string) { return nil, src + ".toJS()" },
+			ZeroExpr:     name + "{}",
+			OmitIfZero:   func(string) string { return "true" },
+			IsDataStruct: true,
 		}, nil
 	case KindAliasEnum:
 		return exprConv{
@@ -887,74 +1137,78 @@ func pointerWrap(inner exprConv) exprConv {
 	}
 }
 
-// nestedDataDeclFor returns the included data-shaped declaration a struct
-// field resolves to — either straight from its IR type (after stripping a
-// null/undefined union variant), or, when override is non-empty, from a
-// "types:" override that names an included declaration (e.g.
-// "R2Conditional", used to pick one branch of an otherwise-unresolvable
-// union) — or nil if it doesn't refer to one at all: a handle ref (already
-// *Name, correctly omitted via its own OmitIfZero), a scalar, js.Value, a
-// slice/map, or an override naming something other than an included data
-// declaration ("js.Value", "int", "[]string", ...).
-func (p *Package) nestedDataDeclFor(fieldType *ir.Type, override string) *ir.Decl {
-	name := override
-	if name == "" {
-		target := fieldType
-		if nn, ok := splitNullable(fieldType); ok {
-			target = nn
-		}
-		if target == nil || target.K != "ref" {
-			return nil
-		}
-		name = target.Name
-	}
-	d, ok := p.included[name]
-	if !ok {
-		return nil
-	}
-	switch classify(p.declByName, d) {
-	case KindData, KindAliasData:
-		return d
-	default:
-		return nil
-	}
+// isDataStructConv reports whether conv is a plain (non-pointer) Go struct
+// conversion for a data-shaped declaration — see exprConv.IsDataStruct.
+func isDataStructConv(conv exprConv) bool {
+	return conv.IsDataStruct
 }
 
 // fieldConv resolves the conversion for one data-type struct field
 // (property member m of data-shaped declaration d), applying a "types:"
 // override if present and, per tmp/06-codegen-spec.md 1.3's "data 型" rule,
 // pointer-wrapping an optional-or-nullable field whose type resolves to a
-// nested data-type reference — whether directly (`field?: Other` /
-// `field: Other | null` / `field: Other | undefined`) or via a "types:"
+// nested data-type struct — whether directly (`field?: Other` /
+// `field: Other | null` / `field: Other | undefined`), via a "types:"
 // override naming an included data declaration (e.g. R2GetOptions.onlyIf's
 // `types: R2Conditional`, picking one branch of an `R2Conditional |
-// Headers` union) — into `*Other`, omitted entirely when nil in toJS and
-// only allocated-and-decoded when present in fromJS. Without this, a
-// plain (non-pointer) struct field can't tell its zero value apart from
-// "the caller didn't set this", so toJS always sent it — e.g.
-// R2GetOptions.range / R2PutOptions.onlyIf previously always serialized
-// `{}` even when unset. A handle-type reference field is already *Name via
-// declRefConv and is unaffected; likewise a "types:" override naming
-// anything other than an included data declaration (js.Value, int,
-// []string, ...) is left exactly as specified.
-func (p *Package) fieldConv(d *ir.Decl, m ir.Member) (exprConv, error) {
+// Headers` union), or via an inline object/union type literal synthesized
+// into its own data type (5.1 item 1) — into `*Other`, omitted entirely
+// when nil in toJS and only allocated-and-decoded when present in fromJS.
+// Without this, a plain (non-pointer) struct field can't tell its zero
+// value apart from "the caller didn't set this", so toJS always sent it —
+// e.g. R2GetOptions.range / R2PutOptions.onlyIf previously always
+// serialized `{}` even when unset. A handle-type reference field is
+// already *Name via declRefConv and is unaffected; likewise a "types:"
+// override naming anything other than an included data declaration
+// (js.Value, int, []string, ...) is left exactly as specified.
+//
+// It also sets curNameHint (structName+fieldName, per item 1's naming
+// rule) around type resolution, and folds any notef notes raised while
+// resolving m's type (e.g. a union resolved via the single-included-ref
+// rule) into the doc string it returns — the caller uses that in place of
+// m.Doc for the emitted comment.
+func (p *Package) fieldConv(d *ir.Decl, m ir.Member) (exprConv, string, error) {
 	override := p.typeOverride(d.Name, m.Name, "")
-	conv, err := p.convFor(m.Type, override)
+	structName := p.declGoName(d)
+	fieldName := p.memberName(d.Name, m.Name)
+	prevMember := p.curMemberName
+	p.curMemberName = m.Name
+	p.resetNotes()
+	conv, err := p.convForNamed(m.Type, override, structName+fieldName)
+	notes := p.takeNotes()
+	p.curMemberName = prevMember
 	if err != nil {
-		return exprConv{}, err
+		return exprConv{}, "", err
 	}
 	if m.Optional || isNullableType(m.Type) {
-		if p.nestedDataDeclFor(m.Type, override) != nil {
+		if isDataStructConv(conv) {
 			conv = pointerWrap(conv)
 		}
 	}
-	return conv, nil
+	return conv, appendNotesToDoc(m.Doc, notes), nil
 }
 
+// unionConv resolves a union type per tmp/06-codegen-spec.md 5.1 item 2's
+// default rules (tried in order below), falling back to the pre-item-2
+// behavior — js.Value with a warning — only when none of them apply:
+//
+//  1. every non-null/undefined member is a string literal or plain string
+//     -> string
+//  2. exactly one member remains after stripping null/undefined -> that
+//     member's own conversion (unchanged from before item 2)
+//  3. every remaining member is a numeric literal (or plain number) ->
+//     float64
+//  4. every remaining member is boolean-ish (a bool, a bool literal, or a
+//     union of only those) -> bool
+//  5. every remaining member resolves to a data shape (an object literal,
+//     or a ref to one - including one outside this package's include
+//     list, matching the existing top-level-alias union-merge rule) ->
+//     a synthesized merged data type (item 1)
+//  6. every remaining member is a ref, and exactly one of them names a
+//     declaration in this package's include list -> that declaration,
+//     with an info-level note (not a warning) on the affected field/
+//     method's doc comment recording which branch was chosen
 func (p *Package) unionConv(t *ir.Type) (exprConv, error) {
-	if allStringLiterals(t.Types) {
-		return scalarConv("string", ".String()", `""`), nil
-	}
 	var nonNull []ir.Type
 	for _, mt := range t.Types {
 		if mt.K == "prim" && (mt.Name == "null" || mt.Name == "undefined") {
@@ -962,11 +1216,122 @@ func (p *Package) unionConv(t *ir.Type) (exprConv, error) {
 		}
 		nonNull = append(nonNull, mt)
 	}
+	if len(nonNull) == 0 {
+		return jsValueConv(), nil
+	}
+	if allStringy(nonNull) {
+		return scalarConv("string", ".String()", `""`), nil
+	}
 	if len(nonNull) == 1 {
 		return p.convFor(&nonNull[0], "")
 	}
-	p.warnf("unsupported union type, falling back to js.Value")
+	if allNumbery(nonNull) {
+		return scalarConv("float64", ".Float()", "0"), nil
+	}
+	if allBooleanishTypes(nonNull) {
+		return boolConv(), nil
+	}
+	if members, ok := resolveUnionMembers(p.declByName, nonNull, 0); ok {
+		return p.synthesizeDataType(members)
+	}
+	if conv, ok, err := p.singleIncludedRefUnion(nonNull); err != nil {
+		return exprConv{}, err
+	} else if ok {
+		return conv, nil
+	}
+	p.warnCtxf("unsupported union type, falling back to js.Value")
 	return jsValueConv(), nil
+}
+
+// allStringy reports whether every type in types is either the "string"
+// primitive or a string literal (tmp/06-codegen-spec.md 5.1 item 2's
+// "文字列リテラルと string の混在 → string").
+func allStringy(types []ir.Type) bool {
+	if len(types) == 0 {
+		return false
+	}
+	for i := range types {
+		t := &types[i]
+		if t.K == "prim" && t.Name == "string" {
+			continue
+		}
+		if t.IsStringLiteral() {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// allNumbery reports whether every type in types is either the "number"
+// primitive or a numeric literal (item 2's "数値リテラルの union → float64",
+// extended defensively to a union mixing in the plain type too, the same
+// way allStringy handles string).
+func allNumbery(types []ir.Type) bool {
+	if len(types) == 0 {
+		return false
+	}
+	for i := range types {
+		t := &types[i]
+		if t.K == "prim" && t.Name == "number" {
+			continue
+		}
+		if t.K == "literal" {
+			if _, ok := t.Value.(float64); ok {
+				continue
+			}
+		}
+		return false
+	}
+	return true
+}
+
+// allBooleanishTypes reports whether every type in types is boolean-ish, per
+// isBooleanish (flatten.go) — item 2's "boolean と真偽リテラルの混在 →
+// bool".
+func allBooleanishTypes(types []ir.Type) bool {
+	if len(types) == 0 {
+		return false
+	}
+	for i := range types {
+		if !isBooleanish(&types[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// singleIncludedRefUnion implements item 2's ref-union rule: if every type
+// in nonNull is a plain ref, and exactly one of them names a declaration in
+// this package's include list, that declaration's conversion is used (ok
+// is true), with an info-level note recording the choice. Otherwise ok is
+// false (including when nonNull contains a non-ref type at all, in which
+// case the caller's ordinary warning applies instead).
+func (p *Package) singleIncludedRefUnion(nonNull []ir.Type) (exprConv, bool, error) {
+	for i := range nonNull {
+		if nonNull[i].K != "ref" {
+			return exprConv{}, false, nil
+		}
+	}
+	var chosen *ir.Type
+	var names []string
+	count := 0
+	for i := range nonNull {
+		names = append(names, nonNull[i].Name)
+		if _, ok := p.included[nonNull[i].Name]; ok {
+			count++
+			chosen = &nonNull[i]
+		}
+	}
+	if count != 1 {
+		return exprConv{}, false, nil
+	}
+	conv, err := p.convFor(chosen, "")
+	if err != nil {
+		return exprConv{}, false, err
+	}
+	p.notef("resolved union (%s) to %s, the only member declared in this package's include list.", strings.Join(names, " | "), chosen.Name)
+	return conv, true, nil
 }
 
 // convForOverride resolves a "types:" Go type override string. Besides the
@@ -997,6 +1362,15 @@ func (p *Package) namedTypeConv(override string) (exprConv, error) {
 		p.useImport("jsrt")
 		p.useImport("io")
 		return readerParamConv(), nil
+	case "http.Header":
+		// tmp/06-codegen-spec.md 5.1 item 4: lets a "types:" override pick
+		// the Headers side of a union cfgen can't otherwise resolve on
+		// its own (e.g. images' HeadersInit, a "Headers |
+		// Record<string,string> | [string,string][]" union), the same
+		// way "R2HTTPMetadata" picks a data-type branch.
+		p.useImport("jsrt")
+		p.useImport("net/http")
+		return headersConv(), nil
 	case "time.Time":
 		// Used to pick the Date side of a "number | Date" union a param
 		// can't otherwise resolve (e.g. DurableObjectStorage.setAlarm's

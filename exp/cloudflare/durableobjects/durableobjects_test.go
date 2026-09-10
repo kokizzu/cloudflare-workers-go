@@ -128,6 +128,77 @@ func TestDurableObjectStorage_SetAlarm(t *testing.T) {
 	}
 }
 
+// TestDurableObjectStorage_Transaction exercises tmp/06-codegen-spec.md 5.1
+// item 5's callback-method support: Transaction's Go closure parameter is
+// wrapped as a JS function via jsrt.AsyncFunc, and the fake "transaction"
+// JS method below invokes it with a fake DurableObjectTransaction-shaped
+// object whose closure calls txn.Put — verifying the closure not only runs
+// but that the *DurableObjectTransaction it receives is a fully usable
+// generated handle (able to make its own further JS calls), not just an
+// opaque js.Value.
+func TestDurableObjectStorage_Transaction(t *testing.T) {
+	fake := js.ValueOf(map[string]any{})
+	var gotKey, gotValue string
+	fake.Set("transaction", js.FuncOf(func(this js.Value, args []js.Value) any {
+		closure := args[0]
+		txn := js.ValueOf(map[string]any{})
+		txn.Set("put", js.FuncOf(func(this js.Value, args []js.Value) any {
+			gotKey = args[0].String()
+			gotValue = args[1].String()
+			return resolvedPromise(js.Undefined())
+		}))
+		// closure(txn) returns a Promise (jsrt.AsyncFunc's own wrapping);
+		// transaction itself resolves once that settles, with the
+		// closure's own resolved value.
+		return closure.Invoke(txn)
+	}))
+
+	s := DurableObjectStorageFromJS(fake)
+	result, err := s.Transaction(func(txn *DurableObjectTransaction) (js.Value, error) {
+		if err := txn.Put("k1", js.ValueOf("v1"), DurableObjectPutOptions{}); err != nil {
+			return js.Value{}, err
+		}
+		return js.ValueOf("committed"), nil
+	})
+	if err != nil {
+		t.Fatalf("Transaction() failed: %v", err)
+	}
+	if gotKey != "k1" || gotValue != "v1" {
+		t.Fatalf("txn.Put() received (%q, %q), want (%q, %q)", gotKey, gotValue, "k1", "v1")
+	}
+	if result.String() != "committed" {
+		t.Fatalf("Transaction() result = %q, want %q", result.String(), "committed")
+	}
+}
+
+// TestDurableObjectState_BlockConcurrencyWhile exercises the
+// zero-argument-callback shape of 5.1 item 5's callback-method support
+// ("() => Promise<U>", as opposed to Transaction's "(a: A) => Promise<U>"):
+// the fake "blockConcurrencyWhile" JS method invokes the wrapped Go closure
+// with no arguments and returns its resolved value.
+func TestDurableObjectState_BlockConcurrencyWhile(t *testing.T) {
+	fake := js.ValueOf(map[string]any{})
+	var called bool
+	fake.Set("blockConcurrencyWhile", js.FuncOf(func(this js.Value, args []js.Value) any {
+		called = true
+		return args[0].Invoke()
+	}))
+
+	s := DurableObjectStateFromJS(fake)
+	result, err := s.BlockConcurrencyWhile(func() (js.Value, error) {
+		return js.ValueOf(float64(42)), nil
+	})
+	if err != nil {
+		t.Fatalf("BlockConcurrencyWhile() failed: %v", err)
+	}
+	if !called {
+		t.Fatalf("the fake blockConcurrencyWhile was never invoked")
+	}
+	if result.Float() != 42 {
+		t.Fatalf("BlockConcurrencyWhile() result = %v, want 42", result.Float())
+	}
+}
+
 // TestDurableObjectStorage_GetJSON_PutJSON round-trips a Go struct through
 // PutJSON/GetJSON against a fake storage backed by a plain Go map, verifying
 // the JSON.stringify/JSON.parse bridge documented on both methods.

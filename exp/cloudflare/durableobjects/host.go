@@ -10,6 +10,7 @@ import (
 	"sync"
 	"syscall/js"
 
+	"github.com/syumai/workers-go/exp/cloudflare/websocket"
 	"github.com/syumai/workers-go/exp/internal/jsrt"
 	"github.com/syumai/workers-go/internal/jshttp"
 	"github.com/syumai/workers-go/internal/jsutil"
@@ -33,25 +34,25 @@ type AlarmHandler interface {
 
 // WebSocketMessageHandler is implemented by an Object that wants to receive
 // the Durable Object's webSocketMessage() trigger, delivered for a
-// WebSocket accepted via DurableObjectState.AcceptWebSocket (the
-// hibernatable WebSocket API). ws is the raw JS WebSocket value; message is
-// either a JS string or an ArrayBuffer, matching the JS side's
-// `string | ArrayBuffer` union — decode it yourself (e.g.
-// message.Type() == js.TypeString) depending on what you send.
+// connection accepted via DurableObjectState.AcceptHibernatingConn (the
+// hibernatable WebSocket API). mt/data decode the JS side's
+// `string | ArrayBuffer` message payload the same way
+// exp/cloudflare/websocket.Conn.ReadMessage does (TextMessage for a JS
+// string, BinaryMessage otherwise).
 type WebSocketMessageHandler interface {
-	WebSocketMessage(ctx context.Context, ws js.Value, message js.Value) error
+	WebSocketMessage(ctx context.Context, conn *websocket.HibernatingConn, mt websocket.MessageType, data []byte) error
 }
 
 // WebSocketCloseHandler is implemented by an Object that wants to receive
 // the Durable Object's webSocketClose() trigger.
 type WebSocketCloseHandler interface {
-	WebSocketClose(ctx context.Context, ws js.Value, code int, reason string, wasClean bool) error
+	WebSocketClose(ctx context.Context, conn *websocket.HibernatingConn, code int, reason string, wasClean bool) error
 }
 
 // WebSocketErrorHandler is implemented by an Object that wants to receive
 // the Durable Object's webSocketError() trigger.
 type WebSocketErrorHandler interface {
-	WebSocketError(ctx context.Context, ws js.Value, err error) error
+	WebSocketError(ctx context.Context, conn *websocket.HibernatingConn, err error) error
 }
 
 // Constructor builds an Object for one Durable Object instance, given its
@@ -213,7 +214,8 @@ func handleWebSocketMessage(ws, message js.Value) error {
 	if !ok {
 		return fmt.Errorf("durableobjects: %T does not implement durableobjects.WebSocketMessageHandler", obj)
 	}
-	return h.WebSocketMessage(context.Background(), ws, message)
+	mt, data := decodeHibernatingMessage(message)
+	return h.WebSocketMessage(context.Background(), websocket.HibernatingConnFromJS(ws), mt, data)
 }
 
 func handleWebSocketClose(ws, codeVal, reasonVal, wasCleanVal js.Value) error {
@@ -225,7 +227,7 @@ func handleWebSocketClose(ws, codeVal, reasonVal, wasCleanVal js.Value) error {
 	if !ok {
 		return fmt.Errorf("durableobjects: %T does not implement durableobjects.WebSocketCloseHandler", obj)
 	}
-	return h.WebSocketClose(context.Background(), ws, codeVal.Int(), reasonVal.String(), wasCleanVal.Bool())
+	return h.WebSocketClose(context.Background(), websocket.HibernatingConnFromJS(ws), codeVal.Int(), reasonVal.String(), wasCleanVal.Bool())
 }
 
 func handleWebSocketError(ws, errVal js.Value) error {
@@ -237,7 +239,22 @@ func handleWebSocketError(ws, errVal js.Value) error {
 	if !ok {
 		return fmt.Errorf("durableobjects: %T does not implement durableobjects.WebSocketErrorHandler", obj)
 	}
-	return h.WebSocketError(context.Background(), ws, errorFromJS(errVal))
+	return h.WebSocketError(context.Background(), websocket.HibernatingConnFromJS(ws), errorFromJS(errVal))
+}
+
+// decodeHibernatingMessage decodes a webSocketMessage() trigger's message
+// argument — the JS side's `string | ArrayBuffer` union — the same way
+// exp/cloudflare/websocket.Conn's "message" event listener does: a JS
+// string becomes TextMessage, anything else (an ArrayBuffer) becomes
+// BinaryMessage.
+func decodeHibernatingMessage(v js.Value) (websocket.MessageType, []byte) {
+	if v.Type() == js.TypeString {
+		return websocket.TextMessage, []byte(v.String())
+	}
+	// js.CopyBytesToGo (via jsrt.BytesFromJS) requires a Uint8Array view,
+	// not a bare ArrayBuffer.
+	view := js.Global().Get("Uint8Array").New(v)
+	return websocket.BinaryMessage, jsrt.BytesFromJS(view)
 }
 
 // errorFromJS converts a thrown JS value (typically an Error) into a Go

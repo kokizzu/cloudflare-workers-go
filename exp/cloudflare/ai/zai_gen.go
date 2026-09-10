@@ -119,12 +119,12 @@ type AiOptions struct {
 	// Each tag can have maximum 50 characters.
 	// Maximum 5 tags are allowed each request.
 	// Duplicate tags will removed.
-	Tags              []string `js:"tags"`
-	Gateway           js.Value `js:"gateway"`
-	ReturnRawResponse bool     `js:"returnRawResponse"`
-	Prefix            string   `js:"prefix"`
-	ExtraHeaders      js.Value `js:"extraHeaders"`
-	Signal            js.Value `js:"signal"`
+	Tags              []string        `js:"tags"`
+	Gateway           *GatewayOptions `js:"gateway"`
+	ReturnRawResponse bool            `js:"returnRawResponse"`
+	Prefix            string          `js:"prefix"`
+	ExtraHeaders      js.Value        `js:"extraHeaders"`
+	Signal            js.Value        `js:"signal"`
 }
 
 func aiOptionsFromJS(v js.Value) (AiOptions, error) {
@@ -148,8 +148,14 @@ func aiOptionsFromJS(v js.Value) (AiOptions, error) {
 		}
 	}
 	{
-		if s := v.Get("gateway"); !s.IsUndefined() && !s.IsNull() {
-			out.Gateway = s
+		if !jsrt.IsNil(v.Get("gateway")) {
+			var val GatewayOptions
+			if tmp, err := gatewayOptionsFromJS(v.Get("gateway")); err != nil {
+				return AiOptions{}, err
+			} else {
+				val = tmp
+			}
+			out.Gateway = &val
 		}
 	}
 	{
@@ -190,8 +196,8 @@ func (o AiOptions) toJS() js.Value {
 		}
 		obj.Set("tags", arr)
 	}
-	if !jsrt.IsNil(o.Gateway) {
-		obj.Set("gateway", o.Gateway)
+	if o.Gateway != nil {
+		obj.Set("gateway", (*o.Gateway).toJS())
 	}
 	if o.ReturnRawResponse {
 		obj.Set("returnRawResponse", o.ReturnRawResponse)
@@ -210,21 +216,21 @@ func (o AiOptions) toJS() js.Value {
 
 // AiTextGenerationInput
 type AiTextGenerationInput struct {
-	Prompt            string                `js:"prompt"`
-	Raw               bool                  `js:"raw"`
-	Stream            bool                  `js:"stream"`
-	MaxTokens         float64               `js:"max_tokens"`
-	Temperature       float64               `js:"temperature"`
-	TopP              float64               `js:"top_p"`
-	TopK              float64               `js:"top_k"`
-	Seed              float64               `js:"seed"`
-	RepetitionPenalty float64               `js:"repetition_penalty"`
-	FrequencyPenalty  float64               `js:"frequency_penalty"`
-	PresencePenalty   float64               `js:"presence_penalty"`
-	Messages          []RoleScopedChatInput `js:"messages"`
-	ResponseFormat    js.Value              `js:"response_format"`
-	Tools             js.Value              `js:"tools"`
-	Functions         []js.Value            `js:"functions"`
+	Prompt            string                           `js:"prompt"`
+	Raw               bool                             `js:"raw"`
+	Stream            bool                             `js:"stream"`
+	MaxTokens         float64                          `js:"max_tokens"`
+	Temperature       float64                          `js:"temperature"`
+	TopP              float64                          `js:"top_p"`
+	TopK              float64                          `js:"top_k"`
+	Seed              float64                          `js:"seed"`
+	RepetitionPenalty float64                          `js:"repetition_penalty"`
+	FrequencyPenalty  float64                          `js:"frequency_penalty"`
+	PresencePenalty   float64                          `js:"presence_penalty"`
+	Messages          []RoleScopedChatInput            `js:"messages"`
+	ResponseFormat    *AiTextGenerationResponseFormat  `js:"response_format"`
+	Tools             js.Value                         `js:"tools"`
+	Functions         []AiTextGenerationFunctionsInput `js:"functions"`
 }
 
 func aiTextGenerationInputFromJS(v js.Value) (AiTextGenerationInput, error) {
@@ -297,8 +303,14 @@ func aiTextGenerationInputFromJS(v js.Value) (AiTextGenerationInput, error) {
 		}
 	}
 	{
-		if s := v.Get("response_format"); !s.IsUndefined() && !s.IsNull() {
-			out.ResponseFormat = s
+		if !jsrt.IsNil(v.Get("response_format")) {
+			var val AiTextGenerationResponseFormat
+			if tmp, err := aiTextGenerationResponseFormatFromJS(v.Get("response_format")); err != nil {
+				return AiTextGenerationInput{}, err
+			} else {
+				val = tmp
+			}
+			out.ResponseFormat = &val
 		}
 	}
 	{
@@ -308,9 +320,13 @@ func aiTextGenerationInputFromJS(v js.Value) (AiTextGenerationInput, error) {
 	}
 	{
 		if s := v.Get("functions"); !s.IsUndefined() && !s.IsNull() {
-			out.Functions = make([]js.Value, s.Length())
+			out.Functions = make([]AiTextGenerationFunctionsInput, s.Length())
 			for i := range out.Functions {
-				out.Functions[i] = s.Index(i)
+				if tmp, err := aiTextGenerationFunctionsInputFromJS(s.Index(i)); err != nil {
+					return AiTextGenerationInput{}, err
+				} else {
+					out.Functions[i] = tmp
+				}
 			}
 		}
 	}
@@ -359,8 +375,8 @@ func (o AiTextGenerationInput) toJS() js.Value {
 		}
 		obj.Set("messages", arr)
 	}
-	if !jsrt.IsNil(o.ResponseFormat) {
-		obj.Set("response_format", o.ResponseFormat)
+	if o.ResponseFormat != nil {
+		obj.Set("response_format", (*o.ResponseFormat).toJS())
 	}
 	if !jsrt.IsNil(o.Tools) {
 		obj.Set("tools", o.Tools)
@@ -368,7 +384,7 @@ func (o AiTextGenerationInput) toJS() js.Value {
 	if len(o.Functions) > 0 {
 		arr := js.Global().Get("Array").New(len(o.Functions))
 		for i, e := range o.Functions {
-			arr.SetIndex(i, e)
+			arr.SetIndex(i, e.toJS())
 		}
 		obj.Set("functions", arr)
 	}
@@ -615,13 +631,13 @@ func (o AiModelsSearchParams) toJS() js.Value {
 
 // AiModelsSearchObject
 type AiModelsSearchObject struct {
-	ID          string     `js:"id"`
-	Source      float64    `js:"source"`
-	Name        string     `js:"name"`
-	Description string     `js:"description"`
-	Task        js.Value   `js:"task"`
-	Tags        []string   `js:"tags"`
-	Properties  []js.Value `js:"properties"`
+	ID          string                           `js:"id"`
+	Source      float64                          `js:"source"`
+	Name        string                           `js:"name"`
+	Description string                           `js:"description"`
+	Task        AIModelsSearchObjectTask         `js:"task"`
+	Tags        []string                         `js:"tags"`
+	Properties  []AIModelsSearchObjectProperties `js:"properties"`
 }
 
 func aiModelsSearchObjectFromJS(v js.Value) (AiModelsSearchObject, error) {
@@ -639,7 +655,11 @@ func aiModelsSearchObjectFromJS(v js.Value) (AiModelsSearchObject, error) {
 		out.Description = v.Get("description").String()
 	}
 	{
-		out.Task = v.Get("task")
+		if tmp, err := aIModelsSearchObjectTaskFromJS(v.Get("task")); err != nil {
+			return AiModelsSearchObject{}, err
+		} else {
+			out.Task = tmp
+		}
 	}
 	{
 		out.Tags = make([]string, v.Get("tags").Length())
@@ -648,9 +668,13 @@ func aiModelsSearchObjectFromJS(v js.Value) (AiModelsSearchObject, error) {
 		}
 	}
 	{
-		out.Properties = make([]js.Value, v.Get("properties").Length())
+		out.Properties = make([]AIModelsSearchObjectProperties, v.Get("properties").Length())
 		for i := range out.Properties {
-			out.Properties[i] = v.Get("properties").Index(i)
+			if tmp, err := aIModelsSearchObjectPropertiesFromJS(v.Get("properties").Index(i)); err != nil {
+				return AiModelsSearchObject{}, err
+			} else {
+				out.Properties[i] = tmp
+			}
 		}
 	}
 	return out, nil
@@ -670,8 +694,8 @@ func (o AiModelsSearchObject) toJS() js.Value {
 	if o.Description != "" {
 		obj.Set("description", o.Description)
 	}
-	if !jsrt.IsNil(o.Task) {
-		obj.Set("task", o.Task)
+	if true {
+		obj.Set("task", o.Task.toJS())
 	}
 	if len(o.Tags) > 0 {
 		arr := js.Global().Get("Array").New(len(o.Tags))
@@ -683,7 +707,7 @@ func (o AiModelsSearchObject) toJS() js.Value {
 	if len(o.Properties) > 0 {
 		arr := js.Global().Get("Array").New(len(o.Properties))
 		for i, e := range o.Properties {
-			arr.SetIndex(i, e)
+			arr.SetIndex(i, e.toJS())
 		}
 		obj.Set("properties", arr)
 	}
@@ -721,6 +745,276 @@ func (o UsageTags) toJS() js.Value {
 	}
 	if o.TotalTokens != 0 {
 		obj.Set("total_tokens", o.TotalTokens)
+	}
+	return obj
+}
+
+// GatewayOptions
+type GatewayOptions struct {
+	ID               string          `js:"id"`
+	CacheKey         string          `js:"cacheKey"`
+	CacheTTL         float64         `js:"cacheTtl"`
+	SkipCache        bool            `js:"skipCache"`
+	Metadata         map[string]any  `js:"metadata"`
+	CollectLog       bool            `js:"collectLog"`
+	EventID          string          `js:"eventId"`
+	RequestTimeoutMs float64         `js:"requestTimeoutMs"`
+	Retries          *GatewayRetries `js:"retries"`
+}
+
+func gatewayOptionsFromJS(v js.Value) (GatewayOptions, error) {
+	var out GatewayOptions
+	{
+		out.ID = v.Get("id").String()
+	}
+	{
+		if s := v.Get("cacheKey"); !s.IsUndefined() && !s.IsNull() {
+			out.CacheKey = s.String()
+		}
+	}
+	{
+		if s := v.Get("cacheTtl"); !s.IsUndefined() && !s.IsNull() {
+			out.CacheTTL = s.Float()
+		}
+	}
+	{
+		if s := v.Get("skipCache"); !s.IsUndefined() && !s.IsNull() {
+			out.SkipCache = s.Bool()
+		}
+	}
+	{
+		if s := v.Get("metadata"); !s.IsUndefined() && !s.IsNull() {
+			out.Metadata = make(map[string]any)
+			keys := js.Global().Get("Object").Call("keys", s)
+			for i := 0; i < keys.Length(); i++ {
+				k := keys.Index(i).String()
+				out.Metadata[k] = s.Get(k)
+			}
+		}
+	}
+	{
+		if s := v.Get("collectLog"); !s.IsUndefined() && !s.IsNull() {
+			out.CollectLog = s.Bool()
+		}
+	}
+	{
+		if s := v.Get("eventId"); !s.IsUndefined() && !s.IsNull() {
+			out.EventID = s.String()
+		}
+	}
+	{
+		if s := v.Get("requestTimeoutMs"); !s.IsUndefined() && !s.IsNull() {
+			out.RequestTimeoutMs = s.Float()
+		}
+	}
+	{
+		if !jsrt.IsNil(v.Get("retries")) {
+			var val GatewayRetries
+			if tmp, err := gatewayRetriesFromJS(v.Get("retries")); err != nil {
+				return GatewayOptions{}, err
+			} else {
+				val = tmp
+			}
+			out.Retries = &val
+		}
+	}
+	return out, nil
+}
+
+func (o GatewayOptions) toJS() js.Value {
+	obj := jsrt.NewObject()
+	if o.ID != "" {
+		obj.Set("id", o.ID)
+	}
+	if o.CacheKey != "" {
+		obj.Set("cacheKey", o.CacheKey)
+	}
+	if o.CacheTTL != 0 {
+		obj.Set("cacheTtl", o.CacheTTL)
+	}
+	if o.SkipCache {
+		obj.Set("skipCache", o.SkipCache)
+	}
+	if len(o.Metadata) > 0 {
+		m := jsrt.NewObject()
+		for k, v := range o.Metadata {
+			m.Set(k, v)
+		}
+		obj.Set("metadata", m)
+	}
+	if o.CollectLog {
+		obj.Set("collectLog", o.CollectLog)
+	}
+	if o.EventID != "" {
+		obj.Set("eventId", o.EventID)
+	}
+	if o.RequestTimeoutMs != 0 {
+		obj.Set("requestTimeoutMs", o.RequestTimeoutMs)
+	}
+	if o.Retries != nil {
+		obj.Set("retries", (*o.Retries).toJS())
+	}
+	return obj
+}
+
+// GatewayRetries
+type GatewayRetries struct {
+	MaxAttempts  float64 `js:"maxAttempts"`
+	RetryDelayMs float64 `js:"retryDelayMs"`
+	Backoff      string  `js:"backoff"`
+}
+
+func gatewayRetriesFromJS(v js.Value) (GatewayRetries, error) {
+	var out GatewayRetries
+	{
+		if s := v.Get("maxAttempts"); !s.IsUndefined() && !s.IsNull() {
+			out.MaxAttempts = s.Float()
+		}
+	}
+	{
+		if s := v.Get("retryDelayMs"); !s.IsUndefined() && !s.IsNull() {
+			out.RetryDelayMs = s.Float()
+		}
+	}
+	{
+		if s := v.Get("backoff"); !s.IsUndefined() && !s.IsNull() {
+			out.Backoff = s.String()
+		}
+	}
+	return out, nil
+}
+
+func (o GatewayRetries) toJS() js.Value {
+	obj := jsrt.NewObject()
+	if o.MaxAttempts != 0 {
+		obj.Set("maxAttempts", o.MaxAttempts)
+	}
+	if o.RetryDelayMs != 0 {
+		obj.Set("retryDelayMs", o.RetryDelayMs)
+	}
+	if o.Backoff != "" {
+		obj.Set("backoff", o.Backoff)
+	}
+	return obj
+}
+
+// AiTextGenerationResponseFormat
+type AiTextGenerationResponseFormat struct {
+	Type       string   `js:"type"`
+	JSONSchema js.Value `js:"json_schema"`
+}
+
+func aiTextGenerationResponseFormatFromJS(v js.Value) (AiTextGenerationResponseFormat, error) {
+	var out AiTextGenerationResponseFormat
+	{
+		out.Type = v.Get("type").String()
+	}
+	{
+		if s := v.Get("json_schema"); !s.IsUndefined() && !s.IsNull() {
+			out.JSONSchema = s
+		}
+	}
+	return out, nil
+}
+
+func (o AiTextGenerationResponseFormat) toJS() js.Value {
+	obj := jsrt.NewObject()
+	if o.Type != "" {
+		obj.Set("type", o.Type)
+	}
+	if !jsrt.IsNil(o.JSONSchema) {
+		obj.Set("json_schema", o.JSONSchema)
+	}
+	return obj
+}
+
+// AiTextGenerationFunctionsInput
+type AiTextGenerationFunctionsInput struct {
+	Name string `js:"name"`
+	Code string `js:"code"`
+}
+
+func aiTextGenerationFunctionsInputFromJS(v js.Value) (AiTextGenerationFunctionsInput, error) {
+	var out AiTextGenerationFunctionsInput
+	{
+		out.Name = v.Get("name").String()
+	}
+	{
+		out.Code = v.Get("code").String()
+	}
+	return out, nil
+}
+
+func (o AiTextGenerationFunctionsInput) toJS() js.Value {
+	obj := jsrt.NewObject()
+	if o.Name != "" {
+		obj.Set("name", o.Name)
+	}
+	if o.Code != "" {
+		obj.Set("code", o.Code)
+	}
+	return obj
+}
+
+// AIModelsSearchObjectTask
+type AIModelsSearchObjectTask struct {
+	ID          string `js:"id"`
+	Name        string `js:"name"`
+	Description string `js:"description"`
+}
+
+func aIModelsSearchObjectTaskFromJS(v js.Value) (AIModelsSearchObjectTask, error) {
+	var out AIModelsSearchObjectTask
+	{
+		out.ID = v.Get("id").String()
+	}
+	{
+		out.Name = v.Get("name").String()
+	}
+	{
+		out.Description = v.Get("description").String()
+	}
+	return out, nil
+}
+
+func (o AIModelsSearchObjectTask) toJS() js.Value {
+	obj := jsrt.NewObject()
+	if o.ID != "" {
+		obj.Set("id", o.ID)
+	}
+	if o.Name != "" {
+		obj.Set("name", o.Name)
+	}
+	if o.Description != "" {
+		obj.Set("description", o.Description)
+	}
+	return obj
+}
+
+// AIModelsSearchObjectProperties
+type AIModelsSearchObjectProperties struct {
+	PropertyID string `js:"property_id"`
+	Value      string `js:"value"`
+}
+
+func aIModelsSearchObjectPropertiesFromJS(v js.Value) (AIModelsSearchObjectProperties, error) {
+	var out AIModelsSearchObjectProperties
+	{
+		out.PropertyID = v.Get("property_id").String()
+	}
+	{
+		out.Value = v.Get("value").String()
+	}
+	return out, nil
+}
+
+func (o AIModelsSearchObjectProperties) toJS() js.Value {
+	obj := jsrt.NewObject()
+	if o.PropertyID != "" {
+		obj.Set("property_id", o.PropertyID)
+	}
+	if o.Value != "" {
+		obj.Set("value", o.Value)
 	}
 	return obj
 }
