@@ -103,6 +103,30 @@ exp/cloudflare/<pkg>/<pkg>.go                                (hand-written, only
   overrides file for it either. It lives under `exp/cloudflare` (rather than
   `cloudflare/`) purely because it wraps a runtime API with no other Go
   binding yet, not because any part of it is generated.
+* `tail` generates `TraceItem` and its nested types, delivered to a Worker's
+  `tail(events, env, ctx)` handler — i.e. a [Tail Worker](https://developers.cloudflare.com/workers/observability/logs/tail-workers/)
+  consuming another Worker's execution traces via that Worker's
+  `tail_consumers` config. `tail.Handle` registers the handler the same way
+  `email.Handle` does. See "Tail Workers" below for `TraceItem.event`'s
+  hand-written `EventKind()`/typed-accessor treatment.
+* `secrets` generates `SecretsStoreSecret`, the [Secrets Store](https://developers.cloudflare.com/secrets-store/integrations/workers/)
+  binding — a single async `Get() (string, error)`. Nothing hand-written.
+* `dispatch` generates `DispatchNamespace`/`DynamicDispatchOptions`/
+  `DynamicDispatchLimits`, the [Workers for Platforms dynamic dispatch](https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/get-started/dynamic-dispatch/)
+  binding; `dispatch.go` adds a hand-written `GetClient` — see "Dynamic
+  dispatch" below.
+* `workflows` now also generates `Workflow.CreateBatch` and
+  `WorkflowInstance.SendEvent`. `sendEvent`'s parameter is a destructured
+  object literal in the `.d.ts` (`{ type, payload }`), so `workflows.yaml`
+  renames it with a `rename: "WorkflowInstance.sendEvent.<raw name>": event`
+  entry before cfgen synthesizes the `WorkflowInstanceSendEventEvent` struct.
+* `email` generates the builder overloads too: `SendEmail.SendBuilder` and
+  `ForwardableEmailMessage.ReplyBuilder` take the flattened
+  `EmailMessageBuilder`/`EmailReplyMessageBuilder` structs; their address and
+  attachment fields stay `js.Value` (documented in `email.yaml`).
+* `cloudflare/kv` (the hand-written package) exposes the bulk overload as
+  `GetStrings(keys []string, opts *GetOptions) (map[string]string, error)`,
+  wrapping the generated `GetTextMultiple`; keys with no value are omitted.
 
 ### A hand-written package wrapping a generated one
 
@@ -142,6 +166,62 @@ mysql.RegisterDialContext("tcp", func(ctx context.Context, addr string) (net.Con
 })
 db, err := sql.Open("mysql", h.ConnectionString())
 ```
+
+## Tail Workers
+
+`exp/cloudflare/tail/tail.go` adds `tail.Handle(func(items []tail.TraceItem)
+error)`, registering the Worker's `tail(events, env, ctx)` export the same
+way `exp/cloudflare/email.Handle` registers `email`. See
+`_examples/tail-worker` for a complete, runnable example (including the
+`tail_consumers` config, which lives on the *producer* Worker's
+`wrangler.toml`, not this one's).
+
+`TraceItem.event` is a 10-way discriminated union (one branch per trigger
+kind the producer Worker might have handled — `fetch`, `scheduled`,
+`alarm`, `queue`, `email`, ...), which cfgen can't synthesize a single Go
+type for without losing the discriminant — see `tail.yaml`'s doc comment.
+It's generated as `js.Value`, and `TraceItem.EventKind() string` (hand-written
+in `tail.go`) infers which branch it is from which of that branch's
+distinguishing properties are present on the raw object, e.g. `"fetch"` for
+one with a `request` property. A typed accessor is then available per
+identifiable kind — `FetchEvent()`, `ScheduledEvent()`, `AlarmEvent()`,
+`QueueEvent()`, `EmailEvent()`, `TailEvent()`, `JsRpcEvent()`,
+`HibernatableWebSocketEvent()` — each returning `(*T, bool)`, `ok` true only
+when `EventKind()` matches. `TraceItemConnectEventInfo` and
+`TraceItemCustomEventInfo` carry no properties of their own, so `connect`
+and `custom` events can't be told apart this way; both (and any
+unrecognized shape) report `EventKind() == ""`.
+
+`TraceItem.EventTimestamp` (a Unix millisecond timestamp) is `number |
+null` in the source types, but cfgen's `types:` overrides only support a
+`*int` pointer spelling, not `*float64` — see `tail.yaml`'s doc comment —
+so it's generated as a plain `float64`, and `TraceItem.EventTime() (time.Time,
+bool)` treats an `EventTimestamp` of exactly `0` as absent (indistinguishable
+from a real 0 without an underlying js.Value to re-check, which `TraceItem`,
+a plain data struct, doesn't retain).
+
+## Dynamic dispatch
+
+`exp/cloudflare/dispatch/dispatch.go` adds `(*DispatchNamespace).GetClient(name
+string, opts *DynamicDispatchOptions) (*fetch.Client, error)`, bridging
+`DispatchNamespace.get()` — which returns a `Fetcher`, left as `js.Value`
+since `Fetcher` has no generated Go type of its own, the same way
+`Request`/`Response` don't — to `cloudflare/fetch.NewClient(fetch.WithBinding(v))`,
+the same pattern `hyperdrive.Hyperdrive.Connect` uses for its own
+synchronous JS return value:
+
+```go
+ns, err := dispatch.NewDispatchNamespace("DISPATCHER")
+client, err := ns.GetClient("customer-worker-123", nil)
+resp, err := client.HTTPClient(fetch.RedirectModeFollow).Get("https://example.com/")
+```
+
+The plain generated `Get(name string, args map[string]any, options
+DynamicDispatchOptions) (js.Value, error)` is still available directly for
+the raw `Fetcher` value. `args` and `DynamicDispatchOptions.Outbound` are
+both TypeScript index-signature object types (`{ [key: string]: any }`),
+overridden to `map[string]any` in `dispatch.yaml` since cfgen's inline-object
+synthesis doesn't recognize that shape as a `Record`-style map on its own.
 
 ## Hosting a Go type as a Durable Object
 
@@ -411,7 +491,7 @@ handwritten:                       # skip generating this declaration/member;
 exclude:                           # drop a specific member of an included
                                     # declaration (e.g. one cfgen can't
                                     # generate, or one you don't want yet)
-  - Workflow.createBatch
+  - ImagesBinding.hosted
 ```
 
 A method whose only parameter is a callback shaped `(a: A) => Promise<U>` or

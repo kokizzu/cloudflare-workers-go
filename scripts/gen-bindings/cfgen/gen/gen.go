@@ -343,12 +343,12 @@ func (p *Package) genMethod(sb *strings.Builder, d *ir.Decl, structName string, 
 			continue
 		}
 		if prm.Rest {
-			pname := goParamName(prm.Name)
+			pname := p.paramGoName(d.Name, m.Name, prm.Name)
 			elemType := prm.Type
 			if elemType != nil && elemType.K == "array" {
 				elemType = elemType.Elem
 			}
-			elemConv, err := p.convForParam(elemType, "", methodHint+exportedName(prm.Name))
+			elemConv, err := p.convForParam(elemType, "", methodHint+exportedName(pname))
 			if err != nil {
 				return err
 			}
@@ -377,9 +377,9 @@ func (p *Package) genMethod(sb *strings.Builder, d *ir.Decl, structName string, 
 			restExpr = argVar
 			continue
 		}
-		pname := goParamName(prm.Name)
+		pname := p.paramGoName(d.Name, m.Name, prm.Name)
 		override := p.typeOverride(d.Name, m.Name, "params."+prm.Name)
-		conv, err := p.convForParam(prm.Type, override, methodHint+exportedName(prm.Name))
+		conv, err := p.convForParam(prm.Type, override, methodHint+exportedName(pname))
 		if err != nil {
 			return err
 		}

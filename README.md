@@ -34,7 +34,35 @@
 * [x] Queues
   - [x] Producer
   - [x] Consumer
-* [x] Additional runtime bindings (Rate Limiting, Vectorize, Workflows, Hyperdrive, `request.cf`, ...), auto-generated from `@cloudflare/workers-types` — see [exp/cloudflare](exp/cloudflare/README.md) (experimental)
+* [x] Additional runtime bindings and triggers, auto-generated from `@cloudflare/workers-types` — see [Experimental packages (`exp/cloudflare`)](#experimental-packages-expcloudflare) below
+
+## Experimental packages (`exp/cloudflare`)
+
+In addition to the stable packages above, [`exp/cloudflare`](exp/cloudflare/README.md) provides Go bindings for more Cloudflare Workers runtime APIs, mostly auto-generated from `@cloudflare/workers-types`. These packages are experimental: their API may still change in a future release.
+
+| Package | Description |
+| --- | --- |
+| [`ratelimit`](exp/cloudflare/ratelimit) | Rate Limiting binding |
+| [`versions`](exp/cloudflare/versions) | Worker Version metadata (`version_metadata` binding) |
+| [`analytics`](exp/cloudflare/analytics) | Analytics Engine binding |
+| [`hyperdrive`](exp/cloudflare/hyperdrive) | Hyperdrive binding, including a `net.Conn` bridge into `cloudflare/sockets` |
+| [`workflows`](exp/cloudflare/workflows) | Workflows binding |
+| [`vectorize`](exp/cloudflare/vectorize) | Vectorize (vector database) binding |
+| [`cf`](exp/cloudflare/cf) | `request.cf`, the metadata Cloudflare's edge attaches to a request |
+| [`kv`](exp/cloudflare/kv) | Generated Level 1 Workers KV binding, wrapped by the stable `cloudflare/kv` package above |
+| [`r2`](exp/cloudflare/r2) | Generated Level 1 R2 binding, wrapped by the stable `cloudflare/r2` package |
+| [`queues`](exp/cloudflare/queues) | Generated Level 1 Queues producer binding, wrapped by the stable `cloudflare/queues` package |
+| [`cache`](exp/cloudflare/cache) | Generated Level 1 Cache API binding, wrapped by the stable `cache` package |
+| [`images`](exp/cloudflare/images) | Cloudflare Images runtime (image transformation) binding |
+| [`ai`](exp/cloudflare/ai) | Workers AI binding |
+| [`email`](exp/cloudflare/email) | Email Workers binding: sending, forwarding, and the `email(message, env, ctx)` handler |
+| [`websocket`](exp/cloudflare/websocket) | Server-side WebSocket upgrade, including Durable Object hibernation support |
+| [`durableobjects`](exp/cloudflare/durableobjects) | Durable Objects: generated bindings plus hand-written hosting support for writing a Durable Object class itself in Go — see [Hosting a Go type as a Durable Object](exp/cloudflare/README.md#hosting-a-go-type-as-a-durable-object) |
+| [`tail`](exp/cloudflare/tail) | Tail Worker support: the `tail(events, env, ctx)` handler for consuming another Worker's execution traces |
+| [`secrets`](exp/cloudflare/secrets) | Secrets Store binding |
+| [`dispatch`](exp/cloudflare/dispatch) | Workers for Platforms dynamic dispatch namespace binding |
+
+See [exp/cloudflare/README.md](exp/cloudflare/README.md) for how these packages are generated, their type-mapping conventions, and the guide to hosting a Go type as a Durable Object (also available as the [`durable-object-go` template](_templates/cloudflare/durable-object-go)).
 
 ## Installation
 
@@ -145,6 +173,8 @@ The [worker-go template](https://github.com/syumai/workers-go/tree/main/_templat
 If you want a smaller Wasm binary, you can use the [TinyGo template](https://github.com/syumai/workers-go/tree/main/_templates/cloudflare/worker-tinygo) instead.
 
 The TinyGo template requires TinyGo 0.42.0 or later. TinyGo 0.41.x cannot build `net/http` for Wasm (see [tinygo-org/tinygo#5350](https://github.com/tinygo-org/tinygo/issues/5350)).
+
+If you want to host a Go type as a [Durable Object](https://developers.cloudflare.com/durable-objects/), use the [`durable-object-go` template](https://github.com/syumai/workers-go/tree/main/_templates/cloudflare/durable-object-go) instead — see [Experimental packages (`exp/cloudflare`)](#experimental-packages-expcloudflare) above.
 
 ### Where can I have discussions about contributions, or ask questions about how to use the library?
 

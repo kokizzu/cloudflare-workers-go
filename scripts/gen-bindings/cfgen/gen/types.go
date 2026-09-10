@@ -419,6 +419,23 @@ func (p *Package) memberName(declName, member string) string {
 	return exportedName(member)
 }
 
+// paramGoName resolves the unexported Go identifier for a method parameter,
+// honoring a "Decl.method.<rawParamName>" rename override (same Rename map
+// as declGoName/memberName, keyed one level deeper). This exists for
+// parameters whose extracted name isn't a valid Go identifier at all — e.g.
+// a .d.ts destructured-object parameter's "name" is the raw destructuring
+// pattern source text ("{\n  type,\n  payload,\n}"), not an identifier
+// (tmp/06-codegen-spec.md 6.2 item 1, WorkflowInstance.sendEvent). Falls
+// back to goParamName(paramName) when no override matches, same as before
+// this existed.
+func (p *Package) paramGoName(declName, member, paramName string) string {
+	key := memberKey(declName, member) + "." + paramName
+	if r, ok := p.Ov.Rename[key]; ok {
+		return r
+	}
+	return goParamName(paramName)
+}
+
 // typeOverride looks up a "types:" override. suffix is "" for a property,
 // "returns" for a method return type, or "params.<name>" for a method
 // parameter type.

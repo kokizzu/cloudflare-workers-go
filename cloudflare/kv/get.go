@@ -55,3 +55,25 @@ func (ns *Namespace) GetReader(key string, opts *GetOptions) (io.ReadCloser, err
 	}
 	return v, nil
 }
+
+// GetStrings gets the string values for up to 100 keys in a single call,
+// wrapping the L1 KVNamespace.GetTextMultiple binding
+// (exp/cloudflare/kv.KVNamespace.GetTextMultiple). Unlike GetString, a
+// missing key is simply left out of the result map instead of causing an
+// error: there's no single ErrNotFound to return for a call spanning
+// several keys, and workers-types' own Map<string, string | null> return
+// shape already distinguishes "missing" (nil) per key without erroring the
+// whole call.
+func (ns *Namespace) GetStrings(keys []string, opts *GetOptions) (map[string]string, error) {
+	m, err := ns.instance.GetTextMultiple(keys, opts.toKVJS("text"))
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		if v != nil {
+			out[k] = *v
+		}
+	}
+	return out, nil
+}

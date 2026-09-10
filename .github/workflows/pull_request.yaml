@@ -63,6 +63,44 @@ jobs:
         shell: bash
         run: make build-examples
 
+  tinygo:
+    name: Build TinyGo templates and examples
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup Golang
+        uses: actions/setup-go@v4
+        with:
+          go-version: 1.21.3
+
+      - name: Setup TinyGo
+        uses: acifani/setup-tinygo@v3
+        with:
+          # Keep in sync with the Makefile's TINYGO_VERSION.
+          tinygo-version: 0.42.0
+
+      # Each of these directories has no go.mod of its own except the
+      # _examples ones (which replace github.com/syumai/workers-go with
+      # "../.."); the two _templates ones resolve against the repo's own
+      # root go.mod instead, the same way `tinygo build` works when run
+      # from inside them locally.
+      - name: Build TinyGo templates and examples
+        shell: bash
+        run: |
+          set -e
+          for dir in \
+            _templates/cloudflare/worker-tinygo \
+            _templates/cloudflare/cron-tinygo \
+            _examples/kv-counter \
+            _examples/durable-object-websocket \
+            _examples/email-forward \
+          ; do
+            echo "tinygo build: $dir"
+            (cd "$dir" && tinygo build -target wasm -no-debug -o /dev/null .)
+          done
+
   mirror-compat:
     name: Mirror compatibility check
     runs-on: ubuntu-latest

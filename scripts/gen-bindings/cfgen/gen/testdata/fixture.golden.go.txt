@@ -7,8 +7,10 @@
 // alias enum, a Promise-returning method, a Record-returning method, an
 // array field, an optional field, a rename, a types override, a
 // handwritten method, extends-flattening (GeoExt inherits and overrides a
-// field from GeoBase), and intersection-flattening (GeoCombined merges a
-// ref and an inline object literal).
+// field from GeoBase), intersection-flattening (GeoCombined merges a ref
+// and an inline object literal), and a parameter rename override
+// (Widget.notify's parameter, whose extracted name is a raw destructured-
+// object pattern rather than a valid Go identifier).
 package widgets
 
 import (
@@ -107,6 +109,12 @@ func (x *Widget) GetMany(keys []string) ([]WidgetInfo, error) {
 		}
 	}
 	return ret, nil
+}
+
+// Notify notify demonstrates a rename override for a parameter whose extracted name is not a valid Go identifier (mirrors WorkflowInstance.sendEvent's destructured-object parameter, tmp/06-codegen-spec.md 6.2 item 1).
+func (x *Widget) Notify(note string) error {
+	_, err := jsrt.Call(x.v, "notify", note)
+	return err
 }
 
 // WidgetInfo WidgetInfo is a data type.

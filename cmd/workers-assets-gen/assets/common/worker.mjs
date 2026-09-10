@@ -61,6 +61,14 @@ async function email(message, env, ctx) {
   return binding.handleEmail(message);
 }
 
+// tail handles a batch of trace events for a Worker configured as a
+// tail_consumers entry of another ("producer") Worker.
+async function tail(events, env, ctx) {
+  const binding = {};
+  await run(createRuntimeContext({ env, ctx, binding }));
+  return binding.handleTail(events);
+}
+
 // onRequest handles request to Cloudflare Pages
 async function onRequest(ctx) {
   const binding = {};
@@ -74,6 +82,7 @@ export default {
   scheduled,
   queue,
   email,
+  tail,
   onRequest,
 };
 

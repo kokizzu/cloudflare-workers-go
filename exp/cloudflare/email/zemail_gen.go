@@ -39,9 +39,16 @@
 //
 // SendEmail.send and ForwardableEmailMessage.reply are each overloaded on a
 // plain (from, to, raw) EmailMessage vs. a builder-object
-// (EmailMessageBuilder / EmailReplyMessageBuilder) form; only the plain
-// EmailMessage overload (index 0 for both) is generated, as Send/Reply. The
-// builder overloads (index 1) are skipped.
+// (EmailMessageBuilder / EmailReplyMessageBuilder) form. The plain
+// EmailMessage overload (index 0 for both) is generated as Send/Reply.
+// The builder overload (index 1) is generated as SendBuilder/ReplyBuilder
+// (tmp/06-codegen-spec.md 6.2 item 2): EmailMessageBuilder is an alias for
+// an intersection (EmailReplyMessageBuilder & EmailDestinations) that 5.1's
+// intersection-flattening resolves into a plain data struct, the same way
+// as GeoCombined in cfgen's own golden-test fixture; EmailReplyMessageBuilder
+// is an ordinary interface data type. Both are included below so cfgen
+// generates them (and their own dependencies, EmailAddress and
+// EmailAttachment) as named Go structs instead of js.Value.
 package email
 
 import (
@@ -73,6 +80,25 @@ func NewSendEmail(bindingName string) (*SendEmail, error) {
 // Send
 func (x *SendEmail) Send(message js.Value) (EmailSendResult, error) {
 	p, err := jsrt.Call(x.v, "send", message)
+	if err != nil {
+		return EmailSendResult{}, err
+	}
+	r, err := jsrt.Await(p)
+	if err != nil {
+		return EmailSendResult{}, err
+	}
+	var ret EmailSendResult
+	if tmp, err := emailSendResultFromJS(r); err != nil {
+		return EmailSendResult{}, err
+	} else {
+		ret = tmp
+	}
+	return ret, nil
+}
+
+// SendBuilder
+func (x *SendEmail) SendBuilder(builder EmailMessageBuilder) (EmailSendResult, error) {
+	p, err := jsrt.Call(x.v, "send", builder.toJS())
 	if err != nil {
 		return EmailSendResult{}, err
 	}
@@ -186,6 +212,28 @@ func (x *ForwardableEmailMessage) Reply(message js.Value) (EmailSendResult, erro
 	return ret, nil
 }
 
+// ReplyBuilder Reply to the sender of this email message with a message built from the given
+// fields. Threading headers (In-Reply-To/References) are set automatically.
+// @param builder The reply message contents.
+// @returns A promise that resolves when the email message is replied.
+func (x *ForwardableEmailMessage) ReplyBuilder(builder EmailReplyMessageBuilder) (EmailSendResult, error) {
+	p, err := jsrt.Call(x.v, "reply", builder.toJS())
+	if err != nil {
+		return EmailSendResult{}, err
+	}
+	r, err := jsrt.Await(p)
+	if err != nil {
+		return EmailSendResult{}, err
+	}
+	var ret EmailSendResult
+	if tmp, err := emailSendResultFromJS(r); err != nil {
+		return EmailSendResult{}, err
+	} else {
+		ret = tmp
+	}
+	return ret, nil
+}
+
 // EmailSendResult The returned data after sending an email
 type EmailSendResult struct {
 	// The Email Message ID
@@ -207,3 +255,246 @@ func (o EmailSendResult) toJS() js.Value {
 	}
 	return obj
 }
+
+// EmailMessageBuilder Fields for composing an email without constructing raw MIME, for
+// `SendEmail.send()`. Requires at least one of `to`, `cc`, or `bcc`.
+type EmailMessageBuilder struct {
+	From        js.Value          `js:"from"`
+	Subject     string            `js:"subject"`
+	ReplyTo     js.Value          `js:"replyTo"`
+	Headers     map[string]string `js:"headers"`
+	Text        string            `js:"text"`
+	HTML        string            `js:"html"`
+	Attachments []js.Value        `js:"attachments"`
+	To          js.Value          `js:"to"`
+	Cc          js.Value          `js:"cc"`
+	Bcc         js.Value          `js:"bcc"`
+}
+
+func emailMessageBuilderFromJS(v js.Value) (EmailMessageBuilder, error) {
+	var out EmailMessageBuilder
+	{
+		out.From = v.Get("from")
+	}
+	{
+		out.Subject = v.Get("subject").String()
+	}
+	{
+		if s := v.Get("replyTo"); !s.IsUndefined() && !s.IsNull() {
+			out.ReplyTo = s
+		}
+	}
+	{
+		if s := v.Get("headers"); !s.IsUndefined() && !s.IsNull() {
+			out.Headers = make(map[string]string)
+			keys := js.Global().Get("Object").Call("keys", s)
+			for i := 0; i < keys.Length(); i++ {
+				k := keys.Index(i).String()
+				var vv string
+				vv = s.Get(k).String()
+				out.Headers[k] = vv
+			}
+		}
+	}
+	{
+		if s := v.Get("text"); !s.IsUndefined() && !s.IsNull() {
+			out.Text = s.String()
+		}
+	}
+	{
+		if s := v.Get("html"); !s.IsUndefined() && !s.IsNull() {
+			out.HTML = s.String()
+		}
+	}
+	{
+		if s := v.Get("attachments"); !s.IsUndefined() && !s.IsNull() {
+			out.Attachments = make([]js.Value, s.Length())
+			for i := range out.Attachments {
+				out.Attachments[i] = s.Index(i)
+			}
+		}
+	}
+	{
+		if s := v.Get("to"); !s.IsUndefined() && !s.IsNull() {
+			out.To = s
+		}
+	}
+	{
+		if s := v.Get("cc"); !s.IsUndefined() && !s.IsNull() {
+			out.Cc = s
+		}
+	}
+	{
+		if s := v.Get("bcc"); !s.IsUndefined() && !s.IsNull() {
+			out.Bcc = s
+		}
+	}
+	return out, nil
+}
+
+func (o EmailMessageBuilder) toJS() js.Value {
+	obj := jsrt.NewObject()
+	if !jsrt.IsNil(o.From) {
+		obj.Set("from", o.From)
+	}
+	if o.Subject != "" {
+		obj.Set("subject", o.Subject)
+	}
+	if !jsrt.IsNil(o.ReplyTo) {
+		obj.Set("replyTo", o.ReplyTo)
+	}
+	if len(o.Headers) > 0 {
+		m := jsrt.NewObject()
+		for k, v := range o.Headers {
+			m.Set(k, v)
+		}
+		obj.Set("headers", m)
+	}
+	if o.Text != "" {
+		obj.Set("text", o.Text)
+	}
+	if o.HTML != "" {
+		obj.Set("html", o.HTML)
+	}
+	if len(o.Attachments) > 0 {
+		arr := js.Global().Get("Array").New(len(o.Attachments))
+		for i, e := range o.Attachments {
+			arr.SetIndex(i, e)
+		}
+		obj.Set("attachments", arr)
+	}
+	if !jsrt.IsNil(o.To) {
+		obj.Set("to", o.To)
+	}
+	if !jsrt.IsNil(o.Cc) {
+		obj.Set("cc", o.Cc)
+	}
+	if !jsrt.IsNil(o.Bcc) {
+		obj.Set("bcc", o.Bcc)
+	}
+	return obj
+}
+
+// EmailReplyMessageBuilder Fields shared by all composed emails (no recipients). Used directly by
+// `ForwardableEmailMessage.reply()`, which always replies to the original
+// sender, and extended by `EmailMessageBuilder` for `SendEmail.send()`.
+type EmailReplyMessageBuilder struct {
+	From        js.Value          `js:"from"`
+	Subject     string            `js:"subject"`
+	ReplyTo     js.Value          `js:"replyTo"`
+	Headers     map[string]string `js:"headers"`
+	Text        string            `js:"text"`
+	HTML        string            `js:"html"`
+	Attachments []js.Value        `js:"attachments"`
+}
+
+func emailReplyMessageBuilderFromJS(v js.Value) (EmailReplyMessageBuilder, error) {
+	var out EmailReplyMessageBuilder
+	{
+		out.From = v.Get("from")
+	}
+	{
+		out.Subject = v.Get("subject").String()
+	}
+	{
+		if s := v.Get("replyTo"); !s.IsUndefined() && !s.IsNull() {
+			out.ReplyTo = s
+		}
+	}
+	{
+		if s := v.Get("headers"); !s.IsUndefined() && !s.IsNull() {
+			out.Headers = make(map[string]string)
+			keys := js.Global().Get("Object").Call("keys", s)
+			for i := 0; i < keys.Length(); i++ {
+				k := keys.Index(i).String()
+				var vv string
+				vv = s.Get(k).String()
+				out.Headers[k] = vv
+			}
+		}
+	}
+	{
+		if s := v.Get("text"); !s.IsUndefined() && !s.IsNull() {
+			out.Text = s.String()
+		}
+	}
+	{
+		if s := v.Get("html"); !s.IsUndefined() && !s.IsNull() {
+			out.HTML = s.String()
+		}
+	}
+	{
+		if s := v.Get("attachments"); !s.IsUndefined() && !s.IsNull() {
+			out.Attachments = make([]js.Value, s.Length())
+			for i := range out.Attachments {
+				out.Attachments[i] = s.Index(i)
+			}
+		}
+	}
+	return out, nil
+}
+
+func (o EmailReplyMessageBuilder) toJS() js.Value {
+	obj := jsrt.NewObject()
+	if !jsrt.IsNil(o.From) {
+		obj.Set("from", o.From)
+	}
+	if o.Subject != "" {
+		obj.Set("subject", o.Subject)
+	}
+	if !jsrt.IsNil(o.ReplyTo) {
+		obj.Set("replyTo", o.ReplyTo)
+	}
+	if len(o.Headers) > 0 {
+		m := jsrt.NewObject()
+		for k, v := range o.Headers {
+			m.Set(k, v)
+		}
+		obj.Set("headers", m)
+	}
+	if o.Text != "" {
+		obj.Set("text", o.Text)
+	}
+	if o.HTML != "" {
+		obj.Set("html", o.HTML)
+	}
+	if len(o.Attachments) > 0 {
+		arr := js.Global().Get("Array").New(len(o.Attachments))
+		for i, e := range o.Attachments {
+			arr.SetIndex(i, e)
+		}
+		obj.Set("attachments", arr)
+	}
+	return obj
+}
+
+// EmailAddress An Email Address
+type EmailAddress struct {
+	Name  string `js:"name"`
+	Email string `js:"email"`
+}
+
+func emailAddressFromJS(v js.Value) (EmailAddress, error) {
+	var out EmailAddress
+	{
+		out.Name = v.Get("name").String()
+	}
+	{
+		out.Email = v.Get("email").String()
+	}
+	return out, nil
+}
+
+func (o EmailAddress) toJS() js.Value {
+	obj := jsrt.NewObject()
+	if o.Name != "" {
+		obj.Set("name", o.Name)
+	}
+	if o.Email != "" {
+		obj.Set("email", o.Email)
+	}
+	return obj
+}
+
+// EmailAttachment A file attachment for an email message
+type EmailAttachment = js.Value

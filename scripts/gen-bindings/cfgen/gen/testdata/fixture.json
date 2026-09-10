@@ -48,6 +48,16 @@
           ],
           "returns": { "k": "ref", "name": "Promise", "args": [ { "k": "array", "elem": { "k": "ref", "name": "WidgetInfo", "args": [] } } ] },
           "typeParams": []
+        },
+        {
+          "kind": "method",
+          "name": "notify",
+          "doc": "notify demonstrates a rename override for a parameter whose extracted name is not a valid Go identifier (mirrors WorkflowInstance.sendEvent's destructured-object parameter, tmp/06-codegen-spec.md 6.2 item 1).",
+          "params": [
+            { "name": "{ note }", "type": { "k": "prim", "name": "string" }, "optional": false, "rest": false }
+          ],
+          "returns": { "k": "prim", "name": "void" },
+          "typeParams": []
         }
       ]
     },

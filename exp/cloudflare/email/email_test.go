@@ -163,3 +163,74 @@ func TestRegisterHandler_ErrorRejectsPromise(t *testing.T) {
 		t.Fatal("handleEmail promise resolved, want a rejection")
 	}
 }
+
+// TestSendEmail_SendBuilder exercises the tmp/06-codegen-spec.md 6.2 item 2
+// builder-object overload of SendEmail.send: EmailMessageBuilder (an
+// intersection-flattened merge of EmailReplyMessageBuilder &
+// EmailDestinations) round-tripping through its generated toJS(), with a
+// From value built as a plain js.Value (since from/replyTo/to/cc/bcc all
+// fall back to js.Value per exp/internal/gen/overrides/email.yaml's
+// documented union overrides).
+func TestSendEmail_SendBuilder(t *testing.T) {
+	var gotFrom, gotSubject, gotTo string
+	fake := js.ValueOf(map[string]any{})
+	fake.Set("send", js.FuncOf(func(this js.Value, args []js.Value) any {
+		gotFrom = args[0].Get("from").String()
+		gotSubject = args[0].Get("subject").String()
+		gotTo = args[0].Get("to").String()
+		result := js.ValueOf(map[string]any{"messageId": "id-1"})
+		return js.Global().Get("Promise").Call("resolve", result)
+	}))
+
+	se := SendEmailFromJS(fake)
+	result, err := se.SendBuilder(EmailMessageBuilder{
+		From:    js.ValueOf("sender@example.com"),
+		Subject: "hello",
+		Text:    "body",
+		To:      js.ValueOf("recipient@example.com"),
+	})
+	if err != nil {
+		t.Fatalf("SendBuilder() failed: %v", err)
+	}
+	if gotFrom != "sender@example.com" {
+		t.Errorf("builder.from sent to JS = %q, want %q", gotFrom, "sender@example.com")
+	}
+	if gotSubject != "hello" {
+		t.Errorf("builder.subject sent to JS = %q, want %q", gotSubject, "hello")
+	}
+	if gotTo != "recipient@example.com" {
+		t.Errorf("builder.to sent to JS = %q, want %q", gotTo, "recipient@example.com")
+	}
+	if result.MessageID != "id-1" {
+		t.Errorf("result.MessageID = %q, want %q", result.MessageID, "id-1")
+	}
+}
+
+// TestForwardableEmailMessage_ReplyBuilder exercises the builder-object
+// overload of ForwardableEmailMessage.reply (EmailReplyMessageBuilder,
+// which has no to/cc/bcc fields).
+func TestForwardableEmailMessage_ReplyBuilder(t *testing.T) {
+	var gotSubject string
+	fake := fakeForwardableEmailMessage(t, func(string) {})
+	fake.Set("reply", js.FuncOf(func(this js.Value, args []js.Value) any {
+		gotSubject = args[0].Get("subject").String()
+		result := js.ValueOf(map[string]any{"messageId": "id-2"})
+		return js.Global().Get("Promise").Call("resolve", result)
+	}))
+
+	msg := ForwardableEmailMessageFromJS(fake)
+	result, err := msg.ReplyBuilder(EmailReplyMessageBuilder{
+		From:    js.ValueOf("sender@example.com"),
+		Subject: "re: hello",
+		Text:    "body",
+	})
+	if err != nil {
+		t.Fatalf("ReplyBuilder() failed: %v", err)
+	}
+	if gotSubject != "re: hello" {
+		t.Errorf("builder.subject sent to JS = %q, want %q", gotSubject, "re: hello")
+	}
+	if result.MessageID != "id-2" {
+		t.Errorf("result.MessageID = %q, want %q", result.MessageID, "id-2")
+	}
+}

@@ -64,6 +64,35 @@ func (x *Workflow) Create(options WorkflowInstanceCreateOptions) (*WorkflowInsta
 	return ret, nil
 }
 
+// CreateBatch Create a batch of instances and return handle for all of them. If a provided id exists, an error will be thrown.
+// `createBatch` is limited at 100 instances at a time or when the RPC limit for the batch (1MiB) is reached.
+// @param batch List of Options when creating an instance including name and params
+// @returns A promise that resolves with a list of handles for the created instances.
+func (x *Workflow) CreateBatch(batch []WorkflowInstanceCreateOptions) ([]*WorkflowInstance, error) {
+	var arg0 js.Value
+	{
+		arr := js.Global().Get("Array").New(len(batch))
+		for i, e := range batch {
+			arr.SetIndex(i, e.toJS())
+		}
+		arg0 = arr
+	}
+	p, err := jsrt.Call(x.v, "createBatch", arg0)
+	if err != nil {
+		return nil, err
+	}
+	r, err := jsrt.Await(p)
+	if err != nil {
+		return nil, err
+	}
+	var ret []*WorkflowInstance
+	ret = make([]*WorkflowInstance, r.Length())
+	for i := range ret {
+		ret[i] = WorkflowInstanceFromJS(r.Index(i))
+	}
+	return ret, nil
+}
+
 // DeleteBatch Delete a batch of Workflow instances and their stored state.
 // `deleteBatch` is limited to 100 instances at a time. Duplicate IDs are deleted once.
 // The result contains one entry for each input position; IDs that do not exist are returned as per-instance errors.
@@ -181,6 +210,16 @@ func (x *WorkflowInstance) Status() (InstanceStatus, error) {
 		ret = tmp
 	}
 	return ret, nil
+}
+
+// SendEvent Send an event to this instance.
+func (x *WorkflowInstance) SendEvent(event WorkflowInstanceSendEventEvent) error {
+	p, err := jsrt.Call(x.v, "sendEvent", event.toJS())
+	if err != nil {
+		return err
+	}
+	_, err = jsrt.Await(p)
+	return err
 }
 
 // WorkflowInstanceCreateOptions
@@ -416,6 +455,34 @@ func (o InstanceStatus) toJS() js.Value {
 
 // WorkflowRetentionDuration
 type WorkflowRetentionDuration = js.Value
+
+// WorkflowInstanceSendEventEvent
+type WorkflowInstanceSendEventEvent struct {
+	Type    string   `js:"type"`
+	Payload js.Value `js:"payload"`
+}
+
+func workflowInstanceSendEventEventFromJS(v js.Value) (WorkflowInstanceSendEventEvent, error) {
+	var out WorkflowInstanceSendEventEvent
+	{
+		out.Type = v.Get("type").String()
+	}
+	{
+		out.Payload = v.Get("payload")
+	}
+	return out, nil
+}
+
+func (o WorkflowInstanceSendEventEvent) toJS() js.Value {
+	obj := jsrt.NewObject()
+	if o.Type != "" {
+		obj.Set("type", o.Type)
+	}
+	if !jsrt.IsNil(o.Payload) {
+		obj.Set("payload", o.Payload)
+	}
+	return obj
+}
 
 // WorkflowInstanceCreateOptionsRetention
 type WorkflowInstanceCreateOptionsRetention struct {

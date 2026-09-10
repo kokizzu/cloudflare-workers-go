@@ -14,6 +14,22 @@ include:
   - WorkflowRetentionDuration
 bindings:
   - Workflow
+rename:
+  # sendEvent's single parameter is a destructured object literal in the
+  # .d.ts (`{ type, payload }`); the IR records its "name" as the raw
+  # destructuring pattern source text (including the .d.ts's original
+  # indentation/line breaks), which is not a valid Go identifier on its
+  # own. cfgen's param-rename support (tmp/06-codegen-spec.md 6.2 item 1)
+  # lets a "Decl.method.<rawParamName>" rename key give it a real Go name
+  # instead; the key below is that literal raw text, quoted so its
+  # embedded newlines survive as YAML escapes. It's tied to workers-types'
+  # exact .d.ts formatting for this parameter — if a future workers-types
+  # release reformats the destructuring pattern, this key stops matching
+  # and cfgen regenerates WorkflowInstance.sendEvent with its param named
+  # after the *unmatched* raw text again, which is not a valid Go
+  # identifier and fails to compile; `make gen-bindings-check` (gofmt/go
+  # vet over the regenerated tree) catches that immediately.
+  "WorkflowInstance.sendEvent.{\n    type,\n    payload,\n  }": event
 types:
   # PARAMS is a TypeScript generic type parameter (the workflow's
   # user-defined event payload shape); cfgen does not generate Go generics,
@@ -31,13 +47,3 @@ types:
   # instead added to include directly and overridden at the decl level, so
   # the ref from the synthesized type resolves to it.
   WorkflowRetentionDuration: "js.Value"
-exclude:
-  # createBatch takes an array of WorkflowInstanceCreateOptions<PARAMS> and
-  # returns an array of WorkflowInstance handles; a batch API is left for a
-  # follow-up rather than generating an under-designed one now.
-  - Workflow.createBatch
-  # sendEvent's single parameter is a destructured object literal in the
-  # .d.ts ({ type, payload }); the IR records its "name" as the raw
-  # destructuring pattern text, which is not a valid Go identifier, so it
-  # cannot be generated as an ordinary method parameter.
-  - WorkflowInstance.sendEvent

@@ -37,13 +37,24 @@ doc: |
 
   SendEmail.send and ForwardableEmailMessage.reply are each overloaded on a
   plain (from, to, raw) EmailMessage vs. a builder-object
-  (EmailMessageBuilder / EmailReplyMessageBuilder) form; only the plain
-  EmailMessage overload (index 0 for both) is generated, as Send/Reply. The
-  builder overloads (index 1) are skipped.
+  (EmailMessageBuilder / EmailReplyMessageBuilder) form. The plain
+  EmailMessage overload (index 0 for both) is generated as Send/Reply.
+  The builder overload (index 1) is generated as SendBuilder/ReplyBuilder
+  (tmp/06-codegen-spec.md 6.2 item 2): EmailMessageBuilder is an alias for
+  an intersection (EmailReplyMessageBuilder & EmailDestinations) that 5.1's
+  intersection-flattening resolves into a plain data struct, the same way
+  as GeoCombined in cfgen's own golden-test fixture; EmailReplyMessageBuilder
+  is an ordinary interface data type. Both are included below so cfgen
+  generates them (and their own dependencies, EmailAddress and
+  EmailAttachment) as named Go structs instead of js.Value.
 include:
   - SendEmail
   - ForwardableEmailMessage
   - EmailSendResult
+  - EmailMessageBuilder
+  - EmailReplyMessageBuilder
+  - EmailAddress
+  - EmailAttachment
 bindings:
   - SendEmail
 types:
@@ -57,8 +68,53 @@ types:
   # warning.
   SendEmail.send.params.message: "js.Value"
   ForwardableEmailMessage.reply.params.message: "js.Value"
+  # EmailReplyMessageBuilder.from/.replyTo are each `string |
+  # EmailAddress`: a two-branch union mixing a plain string with a ref,
+  # which none of 5.1 item 2's default union rules cover (it's not
+  # all-stringy since one branch is a ref, not all-ref since the other
+  # branch is a plain string, and doesn't merge as a data shape since a
+  # bare string branch has no members) — it would otherwise silently fall
+  # back to js.Value with a warning. This override just makes that
+  # js.Value fallback an explicit, documented choice: the caller passes
+  # either a Go string (via js.ValueOf) or an *EmailAddress's .JSValue()/
+  # a hand-built {name, email} js.Value.
+  EmailReplyMessageBuilder.from: "js.Value"
+  EmailReplyMessageBuilder.replyTo: "js.Value"
+  # EmailAttachment is itself a top-level alias for a two-branch union of
+  # inline object literals discriminated on a "disposition" string
+  # literal ("inline" | "attachment"), each with a differently-shaped
+  # rest (contentId is required for "inline", absent for "attachment").
+  # cfgen's union-to-data-struct merge (5.1 item 1) only fires for a
+  # union encountered directly in field/param/return position via
+  # synthesizeDataType's curNameHint mechanism, not for a *named*
+  # top-level alias's own union body — so without this override it falls
+  # back to js.Value with a warning anyway (same outcome, undocumented).
+  # This makes that choice explicit; same precedent as
+  # WorkflowRetentionDuration in workflows.yaml. Overriding it here also
+  # silences the same "unsupported union" warning that would otherwise
+  # repeat once per field typed EmailAttachment[]
+  # (EmailMessageBuilder.attachments, EmailReplyMessageBuilder.attachments)
+  # — those fields resolve straight to []js.Value via this override
+  # instead of trying (and failing) to flatten EmailAttachment's own body
+  # inline.
+  EmailAttachment: "js.Value"
+  # EmailMessageBuilder (the intersection-flattened merge of
+  # EmailReplyMessageBuilder & EmailDestinations) re-encounters
+  # from/replyTo under its own decl name, so the two overrides above
+  # don't cover it — "types:" keys are matched against the decl doing
+  # the resolving, not the field's origin decl. to/cc/bcc
+  # (EmailDestinations' own fields) are each a 3-way `string |
+  # EmailAddress | Array<string | EmailAddress>` union, same
+  # can't-merge-a-bare-string-branch reasoning as from/replyTo above.
+  EmailMessageBuilder.from: "js.Value"
+  EmailMessageBuilder.replyTo: "js.Value"
+  EmailMessageBuilder.to: "js.Value"
+  EmailMessageBuilder.cc: "js.Value"
+  EmailMessageBuilder.bcc: "js.Value"
 overloads:
   SendEmail.send:
     - { index: 0, name: Send }
+    - { index: 1, name: SendBuilder }
   ForwardableEmailMessage.reply:
     - { index: 0, name: Reply }
+    - { index: 1, name: ReplyBuilder }

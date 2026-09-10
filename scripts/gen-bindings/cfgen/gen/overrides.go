@@ -26,12 +26,24 @@ type OverloadEntry struct {
 
 // Overrides is the decoded form of exp/internal/gen/overrides/<pkg>.yaml.
 type Overrides struct {
-	Package  string            `yaml:"package"`
-	Doc      string            `yaml:"doc"`
-	Include  []string          `yaml:"include"`
-	Bindings []string          `yaml:"bindings"`
-	Rename   map[string]string `yaml:"rename"`
-	Types    map[string]string `yaml:"types"`
+	Package  string   `yaml:"package"`
+	Doc      string   `yaml:"doc"`
+	Include  []string `yaml:"include"`
+	Bindings []string `yaml:"bindings"`
+	// Rename maps a "Decl" (whole-declaration), "Decl.member" (field or
+	// method), or "Decl.method.<rawParamName>" (a single method
+	// parameter, tmp/06-codegen-spec.md 6.2 item 1) key to the Go
+	// identifier to use instead of the extracted name's usual
+	// exportedName()/goParamName() spelling. The parameter form exists
+	// for names that aren't valid Go identifiers as extracted at all —
+	// e.g. a .d.ts destructured-object parameter's "name" is the raw
+	// destructuring pattern source text, not an identifier — so its key
+	// is matched against that literal raw text (see
+	// WorkflowInstance.sendEvent in exp/internal/gen/overrides/workflows.yaml
+	// for a worked example, including how to spell the multi-line key in
+	// YAML).
+	Rename map[string]string `yaml:"rename"`
+	Types  map[string]string `yaml:"types"`
 	// TypeParams overrides the Go type chosen for a declaration's type
 	// parameter that would otherwise (with no resolvable default) fall
 	// back to js.Value, keyed "Decl.Param" (tmp/06-codegen-spec.md 5.1
