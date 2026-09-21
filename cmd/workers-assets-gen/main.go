@@ -27,7 +27,7 @@ func main() {
 		buildDirPath string
 	)
 	flag.StringVar(&mode, "mode", string(ModeTinygo), `build mode: tinygo or go`)
-	flag.StringVar(&runtime, "runtime", string(RuntimeCloudflare), `runtime: cloudflare`)
+	flag.StringVar(&runtime, "runtime", string(RuntimeCloudflare), `runtime: cloudflare, browser, or neon`)
 	flag.StringVar(&buildDirPath, "o", defaultBuildDirPath, `output dir path: defaults to "build"`)
 	flag.Parse()
 	if !Mode(mode).IsValid() {
@@ -59,7 +59,7 @@ func runMain(mode Mode, runtime Runtime, buildDirPath string) error {
 	if err := copyRuntimeAssets(runtime, buildDirPath); err != nil {
 		return err
 	}
-	if err := copyCommonAssets(buildDirPath); err != nil {
+	if err := copyCommonAssets(runtime, buildDirPath); err != nil {
 		return err
 	}
 	return nil
@@ -92,13 +92,20 @@ func copyRuntimeAssets(runtime Runtime, buildDirPath string) error {
 	return nil
 }
 
-func copyCommonAssets(buildDirPath string) error {
+func copyCommonAssets(runtime Runtime, buildDirPath string) error {
 	entries, err := assets.ReadDir(commonDirPath)
 	if err != nil {
 		return err
 	}
 	for _, entry := range entries {
-		destPath := path.Join(buildDirPath, entry.Name())
+		fileName := entry.Name()
+		// Neon Functions only loads an entry file named index.mjs or index.js,
+		// so the worker entry point is renamed for that runtime.
+		// https://neon.com/docs/compute/functions/deploy
+		if runtime == RuntimeNeon && fileName == "worker.mjs" {
+			fileName = "index.mjs"
+		}
+		destPath := path.Join(buildDirPath, fileName)
 		originPath := path.Join(commonDirPath, entry.Name())
 		if err := copyFile(destPath, originPath); err != nil {
 			return err

@@ -11,5 +11,7 @@
 
 * `-mode`
   - switch generated file depends on Go / TinyGo.
+* `-runtime`
+  - select the target runtime (`cloudflare`, `browser`, or `neon`; default: `cloudflare`).
 * `-o`
   - change output directory (default: `build`)
