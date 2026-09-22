@@ -204,7 +204,7 @@ func TestProducer_SendText_error(t *testing.T) {
 
 	queue := jsutil.NewObject()
 	queue.Set("send", sendFn)
-	producer := &Producer{queue: queue}
+	producer := &Producer{queue: queuesjs.QueueFromJS(queue)}
 
 	if err := producer.SendText("hello"); err == nil {
 		t.Fatalf("SendText() error = nil, want a non-nil error")
@@ -223,7 +223,17 @@ func TestNewProducer_send(t *testing.T) {
 	var got string
 	sendFn := jstest.Func(t, func(_ js.Value, args []js.Value) any {
 		got = args[0].String()
-		return jstest.Resolved(js.Undefined())
+		// Must resolve with a well-formed QueueSendResponse: the generated
+		// Queue.Send this Producer now delegates to decodes the resolved
+		// value's shape (see validatingProducer above).
+		return jstest.Resolved(map[string]any{
+			"metadata": map[string]any{
+				"metrics": map[string]any{
+					"backlogCount": 0,
+					"backlogBytes": 0,
+				},
+			},
+		})
 	})
 
 	queue := jsutil.NewObject()

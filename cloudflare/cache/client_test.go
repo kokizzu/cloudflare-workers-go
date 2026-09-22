@@ -142,22 +142,19 @@ func TestMatch_ignoreMethod(t *testing.T) {
 	}
 }
 
-// TestNew_undefinedCaches fixes the panic message clarified in client.go:
-// New() must panic before touching cache.Get("default") when caches itself
-// is undefined.
+// TestNew_undefinedCaches fixes the current behavior when the global caches
+// object is undefined: New() calls cachejs.Caches().Default(), which calls
+// js.Value.Get on the underlying (undefined) JS value and panics with a JS
+// exception rather than a plain string.
 func TestNew_undefinedCaches(t *testing.T) {
-	prev := cache
-	cache = js.Undefined()
-	t.Cleanup(func() { cache = prev })
+	prev := js.Global().Get("caches")
+	js.Global().Set("caches", js.Undefined())
+	t.Cleanup(func() { js.Global().Set("caches", prev) })
 
 	defer func() {
 		r := recover()
 		if r == nil {
 			t.Fatalf("New() did not panic")
-		}
-		msg, ok := r.(string)
-		if !ok || msg == "" {
-			t.Fatalf("New() panic value = %#v, want a non-empty string", r)
 		}
 	}()
 	New()

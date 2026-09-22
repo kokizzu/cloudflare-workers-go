@@ -124,14 +124,16 @@ func (fc *fakeCaches) value() js.Value {
 	return obj
 }
 
-// installFakeCaches replaces the package-level cache variable with a fresh
-// fakeCaches for the duration of the test, restoring it via t.Cleanup. It
-// must not be combined with t.Parallel() (cache is shared package state).
+// installFakeCaches replaces the global caches object (which cachejs.Caches,
+// and therefore New/WithNamespace, reads via js.Global().Get("caches")) with
+// a fresh fakeCaches for the duration of the test, restoring it via
+// t.Cleanup. It must not be combined with t.Parallel() (the global is shared
+// process state).
 func installFakeCaches(t *testing.T) *fakeCaches {
 	t.Helper()
 	fc := newFakeCaches(t)
-	prev := cache
-	cache = fc.value()
-	t.Cleanup(func() { cache = prev })
+	prev := js.Global().Get("caches")
+	js.Global().Set("caches", fc.value())
+	t.Cleanup(func() { js.Global().Set("caches", prev) })
 	return fc
 }

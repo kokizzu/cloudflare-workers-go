@@ -2,26 +2,26 @@
 
 package queues
 
-import "testing"
+import (
+	"testing"
 
-// TestSendOptions_toJS fixes sendOptions.toJS's current behavior. Unlike
-// batchSendOptions.toJS and retryOptions.toJS, sendOptions.toJS has no nil
-// guard: it dereferences the receiver unconditionally. That is fine in
-// practice because every caller in this package builds a sendOptions value
-// (never a nil *sendOptions), so this test only exercises non-nil inputs.
-func TestSendOptions_toJS(t *testing.T) {
+	queuesjs "github.com/syumai/workers-go/exp/cloudflare/queues"
+)
+
+// TestSendOptions_toQueuesJS fixes sendOptions.toQueuesJS's current
+// behavior: it maps every field straight through to the generated
+// queuesjs.QueueSendOptions struct (no nil guard is needed since it takes
+// sendOptions by value, and every caller in this package builds a
+// sendOptions value, never a pointer).
+func TestSendOptions_toQueuesJS(t *testing.T) {
 	tests := map[string]struct {
-		opts        sendOptions
-		wantJSON    map[string]any
-		wantNoDelay bool
+		opts sendOptions
 	}{
 		"zero_value": {
-			opts:        sendOptions{},
-			wantNoDelay: true,
+			opts: sendOptions{},
 		},
 		"content_type_only": {
-			opts:        sendOptions{ContentType: contentTypeText},
-			wantNoDelay: true,
+			opts: sendOptions{ContentType: contentTypeText},
 		},
 		"with_delay": {
 			opts: sendOptions{ContentType: contentTypeJSON, DelaySeconds: 5},
@@ -29,41 +29,30 @@ func TestSendOptions_toJS(t *testing.T) {
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			got := tc.opts.toJS()
-			if got.IsUndefined() {
-				t.Fatalf("toJS() = undefined, want an object")
+			got := tc.opts.toQueuesJS()
+			if got.ContentType != queuesjs.QueueContentType(tc.opts.ContentType) {
+				t.Errorf("ContentType = %q, want %q", got.ContentType, tc.opts.ContentType)
 			}
-			if v := got.Get("contentType").String(); v != string(tc.opts.ContentType) {
-				t.Errorf("contentType = %q, want %q", v, tc.opts.ContentType)
-			}
-			delay := got.Get("delaySeconds")
-			if tc.wantNoDelay {
-				if !delay.IsUndefined() {
-					t.Errorf("delaySeconds = %v, want undefined (0 is omitted)", delay)
-				}
-				return
-			}
-			if delay.Int() != tc.opts.DelaySeconds {
-				t.Errorf("delaySeconds = %v, want %v", delay.Int(), tc.opts.DelaySeconds)
+			if got.DelaySeconds != tc.opts.DelaySeconds {
+				t.Errorf("DelaySeconds = %v, want %v", got.DelaySeconds, tc.opts.DelaySeconds)
 			}
 		})
 	}
 }
 
-func TestBatchSendOptions_toJS(t *testing.T) {
+// TestBatchSendOptions_toQueuesJS fixes batchSendOptions.toQueuesJS's nil
+// guard: a nil *batchSendOptions must convert to a zero-value
+// queuesjs.QueueSendBatchOptions rather than panicking.
+func TestBatchSendOptions_toQueuesJS(t *testing.T) {
 	tests := map[string]struct {
 		opts      *batchSendOptions
-		wantUndef bool
 		wantDelay int
-		wantOmit  bool
 	}{
 		"nil": {
-			opts:      nil,
-			wantUndef: true,
+			opts: nil,
 		},
-		"zero_omitted": {
-			opts:     &batchSendOptions{},
-			wantOmit: true,
+		"zero": {
+			opts: &batchSendOptions{},
 		},
 		"delay": {
 			opts:      &batchSendOptions{DelaySeconds: 5},
@@ -72,22 +61,9 @@ func TestBatchSendOptions_toJS(t *testing.T) {
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			got := tc.opts.toJS()
-			if tc.wantUndef {
-				if !got.IsUndefined() {
-					t.Fatalf("toJS() = %v, want undefined", got)
-				}
-				return
-			}
-			delay := got.Get("delaySeconds")
-			if tc.wantOmit {
-				if !delay.IsUndefined() {
-					t.Errorf("delaySeconds = %v, want undefined", delay)
-				}
-				return
-			}
-			if delay.Int() != tc.wantDelay {
-				t.Errorf("delaySeconds = %v, want %v", delay.Int(), tc.wantDelay)
+			got := tc.opts.toQueuesJS()
+			if got.DelaySeconds != tc.wantDelay {
+				t.Errorf("DelaySeconds = %v, want %v", got.DelaySeconds, tc.wantDelay)
 			}
 		})
 	}

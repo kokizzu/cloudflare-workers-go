@@ -4,15 +4,16 @@ package cache
 
 import "testing"
 
-func TestMatchOptions_toJS(t *testing.T) {
+// TestMatchOptions_toCacheJS fixes MatchOptions.toCacheJS's current
+// behavior: a nil *MatchOptions converts to the zero-value
+// cachejs.CacheQueryOptions (IgnoreMethod false) rather than panicking.
+func TestMatchOptions_toCacheJS(t *testing.T) {
 	tests := map[string]struct {
 		opts       *MatchOptions
-		wantUndef  bool
 		wantIgnore bool
 	}{
 		"nil": {
-			opts:      nil,
-			wantUndef: true,
+			opts: nil,
 		},
 		"ignore_method_false": {
 			opts: &MatchOptions{},
@@ -24,32 +25,24 @@ func TestMatchOptions_toJS(t *testing.T) {
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			got := tc.opts.toJS()
-			if tc.wantUndef {
-				if !got.IsUndefined() {
-					t.Fatalf("toJS() = %v, want undefined", got)
-				}
-				return
-			}
-			if got.IsUndefined() {
-				t.Fatalf("toJS() = undefined, want an object")
-			}
-			if v := got.Get("ignoreMethod").Bool(); v != tc.wantIgnore {
-				t.Errorf("ignoreMethod = %v, want %v", v, tc.wantIgnore)
+			got := tc.opts.toCacheJS()
+			if got.IgnoreMethod != tc.wantIgnore {
+				t.Errorf("IgnoreMethod = %v, want %v", got.IgnoreMethod, tc.wantIgnore)
 			}
 		})
 	}
 }
 
-func TestDeleteOptions_toJS(t *testing.T) {
+// TestDeleteOptions_toCacheJS fixes DeleteOptions.toCacheJS's current
+// behavior: a nil *DeleteOptions converts to the zero-value
+// cachejs.CacheQueryOptions (IgnoreMethod false) rather than panicking.
+func TestDeleteOptions_toCacheJS(t *testing.T) {
 	tests := map[string]struct {
 		opts       *DeleteOptions
-		wantUndef  bool
 		wantIgnore bool
 	}{
 		"nil": {
-			opts:      nil,
-			wantUndef: true,
+			opts: nil,
 		},
 		"ignore_method_false": {
 			opts: &DeleteOptions{},
@@ -61,18 +54,9 @@ func TestDeleteOptions_toJS(t *testing.T) {
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			got := tc.opts.toJS()
-			if tc.wantUndef {
-				if !got.IsUndefined() {
-					t.Fatalf("toJS() = %v, want undefined", got)
-				}
-				return
-			}
-			if got.IsUndefined() {
-				t.Fatalf("toJS() = undefined, want an object")
-			}
-			if v := got.Get("ignoreMethod").Bool(); v != tc.wantIgnore {
-				t.Errorf("ignoreMethod = %v, want %v", v, tc.wantIgnore)
+			got := tc.opts.toCacheJS()
+			if got.IgnoreMethod != tc.wantIgnore {
+				t.Errorf("IgnoreMethod = %v, want %v", got.IgnoreMethod, tc.wantIgnore)
 			}
 		})
 	}
