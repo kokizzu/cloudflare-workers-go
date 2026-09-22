@@ -6,6 +6,7 @@ import (
 	"syscall/js"
 
 	"github.com/syumai/workers-go/exp/cloudflare/durableobjects"
+	"github.com/syumai/workers-go/exp/cloudflare/rpc"
 	"github.com/syumai/workers-go/internal/jshttp"
 	"github.com/syumai/workers-go/internal/jsutil"
 )
@@ -84,6 +85,14 @@ func (s *DurableObjectStub) Fetch(req *http.Request) (*http.Response, error) {
 	}
 
 	return jshttp.ToResponse(jsRes)
+}
+
+// RPC returns an RPC client for calling one of this Durable Object's own
+// methods beyond fetch() (see exp/cloudflare/rpc and
+// tmp/06-codegen-spec.md 8) -- Durable Objects support Workers RPC the same
+// way a WorkerEntrypoint reached over a Service binding does.
+func (s *DurableObjectStub) RPC() *rpc.Stub {
+	return rpc.StubFromJS(s.val)
 }
 
 // FetchWebSocket forwards req -- expected to be a WebSocket upgrade

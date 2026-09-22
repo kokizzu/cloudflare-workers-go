@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 
 	workers "github.com/syumai/workers"
@@ -18,6 +19,7 @@ import (
 	"github.com/syumai/workers/cloudflare/kv"
 	"github.com/syumai/workers/cloudflare/queues"
 	"github.com/syumai/workers/cloudflare/r2"
+	"github.com/syumai/workers/exp/cloudflare/rpc"
 )
 
 func main() {
@@ -45,6 +47,15 @@ func main() {
 	cron.ScheduleTaskNonBlock(func(ctx context.Context) error {
 		return nil
 	})
+
+	// rpc.MethodJSON is a generic function; this proves genforward's
+	// type-parameterized wrapper (see internal/cmd/genforward/gen.go's
+	// renderGenericFuncWrapper) type-checks and compiles through the mirror
+	// module, not just `go vet`-clean in isolation.
+	greet := rpc.MethodJSON(func(ctx context.Context, args []json.RawMessage) (string, error) {
+		return "hello", nil
+	})
+	rpc.Register("Greeter", map[string]rpc.Method{"greet": greet})
 
 	workers.Ready()
 }

@@ -120,6 +120,12 @@ exp/cloudflare/<pkg>/<pkg>.go                                (hand-written, only
   object literal in the `.d.ts` (`{ type, payload }`), so `workflows.yaml`
   renames it with a `rename: "WorkflowInstance.sendEvent.<raw name>": event`
   entry before cfgen synthesizes the `WorkflowInstanceSendEventEvent` struct.
+  This is the client-side handle for *calling into* a Workflow; `host.go`
+  adds the separate, hand-written concern of *hosting* a Go type as the
+  Workflow's own `run()` implementation — see "Hosting a Workflow" below.
+  `WorkflowStep` (`step.do`/`sleep`/`sleepUntil`/`waitForEvent`) is entirely
+  hand-written too, since `do`'s config-discriminated overloads don't fit
+  cfgen's single-callback rule.
 * `email` generates the builder overloads too: `SendEmail.SendBuilder` and
   `ForwardableEmailMessage.ReplyBuilder` take the flattened
   `EmailMessageBuilder`/`EmailReplyMessageBuilder` structs; their address and
@@ -364,6 +370,172 @@ db := state.Storage().SQL().OpenDB()
 defer db.Close()
 _, err := db.Exec(`INSERT INTO todos (title) VALUES (?)`, title)
 ```
+
+## Hosting a Workflow
+
+`exp/cloudflare/workflows/host.go` lets a Worker host a Go type's `run()` as
+a [Workflow](https://developers.cloudflare.com/workflows/)'s
+`WorkflowEntrypoint`. See `_examples/workflow-go` for a complete, runnable
+example.
+
+Unlike a Durable Object, a Cloudflare Workflow's `WorkflowEntrypoint`
+doesn't need to keep any state alive between triggers by itself — Workflows
+persists step results and durably replays `run()` on its own — so hosting a
+Workflow follows the regular "one wasm instance per trigger" shape every
+other trigger in this module uses, not the Durable Object
+one-instance-per-object model:
+
+* `worker.mjs`'s `GoWorkflowEntrypoint` base class (which a generated
+  subclass extends — a subclass is required here, since `WorkflowEntrypoint`
+  is abstract) calls `run()` on a fresh wasm instance for the Workflow's
+  `run(event, step)` trigger, passing a `workflow: { className }` runtime
+  context entry.
+* On the Go side, `workflows.Register(className, runner)` records a
+  `Runner` for a class name (call it before `workers.Serve`, at the top of
+  `main`). Every `run()` trigger looks up `workflow.className` in that
+  registry and calls the matching `Runner`.
+* `*workflows.Step` (`Do`/`DoWithConfig`/`DoJSON`/`DoJSONWithConfig`/
+  `Sleep`/`SleepUntil`/`WaitForEvent`) wraps the JS `WorkflowStep` passed
+  into `run()`: `Do`'s callback only runs if that step hasn't already
+  completed for this Workflow instance — on a retry/replay, Workflows
+  returns the saved result instead of calling it again. `DoJSON`/
+  `DoJSONWithConfig` are generic helpers that JSON-encode/decode a step's
+  result instead of working with a raw `js.Value`, the same way
+  `durableobjects.DurableObjectStorage.GetJSON`/`PutJSON` do.
+* Wrap a step (or `Runner`) error with `workflows.NonRetryable(err)` to fail
+  the Workflow instance permanently instead of letting Workflows retry it —
+  this rejects with the runtime's `cloudflare:workflows` `NonRetryableError`
+  class instead of a plain `Error` (fetched from the runtime context the
+  same way `email`'s `EmailMessage` is; unavailable under
+  `runtime/browser.mjs`, where it falls back to a plain `Error`).
+
+### Wiring it up
+
+1. In `main`, before `workers.Serve` (or any other blocking call):
+   ```go
+   workflows.Register("MyWorkflow", func(ctx context.Context, event *workflows.Event, step *workflows.Step) (js.Value, error) {
+       result, err := workflows.DoJSON(step, "step-1", func(ctx context.Context) (MyResult, error) {
+           return MyResult{...}, nil
+       })
+       if err != nil {
+           return js.Value{}, err
+       }
+       if err := step.Sleep("wait", time.Second); err != nil {
+           return js.Value{}, err
+       }
+       return workflows.ResultJSON(result)
+   })
+   ```
+2. Build with `-workflows=MyWorkflow` (comma-separate multiple classes):
+   ```sh
+   go run github.com/syumai/workers-go/cmd/workers-assets-gen -mode=go -workflows=MyWorkflow
+   ```
+   This appends one subclass definition per name to the generated
+   `worker.mjs`:
+   ```js
+   export class MyWorkflow extends GoWorkflowEntrypoint { static goClassName = "MyWorkflow"; }
+   ```
+   The name passed here, the `class_name` in `wrangler.toml`'s
+   `[[workflows]]`, and the `className` given to `workflows.Register` must
+   all match exactly.
+3. Add the binding to `wrangler.toml`:
+   ```toml
+   [[workflows]]
+   name = "my-workflow"
+   binding = "MY_WORKFLOW"
+   class_name = "MyWorkflow"
+   ```
+   A Worker can create/inspect instances of the Workflow it hosts (or any
+   other Workflow binding) through the client-side `workflows.Workflow`/
+   `WorkflowInstance` L1 (`NewWorkflow("MY_WORKFLOW")` — see
+   `zworkflows_gen.go`) — hosting a Workflow and calling into one are
+   independent; a Worker can do either, both, or neither.
+
+## RPC and named entrypoints
+
+`exp/cloudflare/rpc` lets a Worker both *call* [Workers
+RPC](https://developers.cloudflare.com/workers/runtime-apis/rpc/) methods on
+a remote `WorkerEntrypoint` (a named entrypoint reached over a Service
+binding, or a Durable Object's own methods beyond `fetch()`) and *host* its
+own RPC methods as a `WorkerEntrypoint`. See `_examples/rpc-go` for a
+complete, runnable example.
+
+Workers RPC's typed stubs (TypeScript's `Rpc.Provider<T>`) can't be
+generated for statically-typed Go — there's no way to derive a Go method set
+from an arbitrary remote class's shape — so this package is entirely
+hand-written (no generated L1) and dynamic on both sides:
+
+* **Calling** a remote entrypoint: `rpc.NewStub(bindingName)` (or
+  `rpc.StubFromJS` for an existing JS value, e.g. `cloudflare.
+  DurableObjectStub.RPC()`) wraps a Service binding as a `*rpc.Stub`.
+  `Stub.Call(method, args...)` invokes `method` (args converted the way
+  `syscall/js.ValueOf` converts a Go value — primitives, `map[string]any`,
+  `[]any`, `js.Value`, ... — to JS) and awaits its result (an RPC method's
+  return is always a Promise). `Stub.CallJSON(method, &out, args...)`
+  additionally JSON round-trips the result into a typed Go value, the same
+  way `workflows.DoJSON` does for a step's result.
+* **Hosting** RPC methods: `worker.mjs`'s `GoWorkerEntrypoint` base class
+  (extended by a generated subclass — see below) forwards each RPC method
+  call to `handleRPC(name, args)` and its own `fetch()` trigger to
+  `handleEntrypointFetch(req)`, passing an `entrypoint: {className}` runtime
+  context entry, mirroring `GoDurableObject`/`GoWorkflowEntrypoint`'s
+  `#bind` pattern (exposed here as the non-private `_bind()`, since a
+  generated subclass's own methods need to call it, and a JS private method
+  is only reachable from methods defined in the class that declares it).
+  On the Go side, `rpc.Register(className, map[string]rpc.Method)` and
+  `rpc.RegisterFetch(className, http.Handler)` record the class's RPC
+  methods and `fetch()` handler; every call looks up `entrypoint.className`
+  in the registry. `rpc.Method` takes/returns raw `js.Value`s;
+  `rpc.MethodJSON` adapts a typed function instead — since RPC arguments
+  arrive positionally with no fixed arity known to the package, it hands the
+  function each argument individually JSON-encoded (`[]json.RawMessage`) to
+  decode however many/whatever shape the method expects, and JSON-encodes
+  its typed result back into the resolved value.
+
+### Wiring it up
+
+1. In `main`, before `workers.Serve`:
+   ```go
+   rpc.Register("MyService", map[string]rpc.Method{
+       "add": rpc.MethodJSON(func(ctx context.Context, args []json.RawMessage) (int, error) {
+           var a, b int
+           json.Unmarshal(args[0], &a)
+           json.Unmarshal(args[1], &b)
+           return a + b, nil
+       }),
+   })
+   rpc.RegisterFetch("MyService", myFetchHandler) // optional; serves MyService's own fetch()
+   ```
+2. Build with `-entrypoints=MyService:add,greet` (semicolon-separate
+   multiple classes; `Name` alone, with no `:methods`, is also valid — only
+   the always-generated `fetch()` is defined then):
+   ```sh
+   go run github.com/syumai/workers-go/cmd/workers-assets-gen -mode=go -entrypoints=MyService:add,greet
+   ```
+   This appends one subclass definition per class to the generated
+   `worker.mjs`:
+   ```js
+   export class MyService extends GoWorkerEntrypoint {
+     static goClassName = "MyService";
+     async add(...args) { return (await this._bind()).handleRPC("add", args); }
+     async greet(...args) { return (await this._bind()).handleRPC("greet", args); }
+     async fetch(req) { return (await this._bind()).handleEntrypointFetch(req); }
+   }
+   ```
+   The name passed here, the `className` given to `rpc.Register`/
+   `rpc.RegisterFetch`, and (for a Service binding) `wrangler.toml`'s
+   `[[services]] entrypoint` must all match exactly.
+3. Point a Service binding at it in `wrangler.toml` (including from the same
+   Worker, to call its own entrypoint):
+   ```toml
+   [[services]]
+   binding = "SELF"
+   service = "rpc-go"
+   entrypoint = "MyService"
+   ```
+   Then call it: `stub, _ := rpc.NewStub("SELF"); stub.Call("add", 1, 2)`.
+   A Durable Object's own RPC methods work the same way, without a Service
+   binding: `cloudflare.DurableObjectStub.RPC().Call(...)`.
 
 ## Regenerating the bindings
 

@@ -1,0 +1,11 @@
+name = "rpc-go"
+main = "./build/worker.mjs"
+compatibility_date = "2024-04-03"
+
+[[services]]
+binding = "SELF"
+service = "rpc-go"
+entrypoint = "MyService"
+
+[build]
+command = "make build"
