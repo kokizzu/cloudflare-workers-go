@@ -1,0 +1,58 @@
+---
+title: Dynamic dispatch
+description: Invoke customer workers in a Workers for Platforms dispatch namespace.
+sidebar:
+  badge: Experimental
+---
+
+[Workers for Platforms](https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/) lets you run user-supplied workers. The `exp/cloudflare/dispatch` package wraps a dispatch namespace binding and fetches the dispatched worker as a `*fetch.Client`.
+
+:::warning[Experimental]
+This package lives under `exp/cloudflare` and its API may change.
+:::
+
+## Declare the binding
+
+```toml
+[[dispatch_namespaces]]
+binding = "DISPATCHER"
+namespace = "my-dispatch-namespace"
+```
+
+## Dispatch a request
+
+`dispatch.NewDispatchNamespace` resolves the binding by name. `GetClient` looks up the worker script `name` in the namespace and returns a `*fetch.Client`, which you use like a regular fetch binding.
+
+```go
+import (
+	"github.com/syumai/workers-go/cloudflare/fetch"
+	"github.com/syumai/workers-go/exp/cloudflare/dispatch"
+)
+
+ns, err := dispatch.NewDispatchNamespace("DISPATCHER")
+if err != nil {
+	return err
+}
+
+client, err := ns.GetClient("customer-worker-123", nil)
+if err != nil {
+	return err // the script does not exist in this namespace
+}
+
+resp, err := client.HTTPClient(fetch.RedirectModeFollow).Get("https://example.com/")
+```
+
+Pass a `*dispatch.DynamicDispatchOptions` as the second argument to constrain the dispatched worker — `Limits` caps CPU milliseconds and subrequests, and `Outbound` passes arguments to the worker's configured outbound worker.
+
+```go
+client, err := ns.GetClient("customer-worker-123", &dispatch.DynamicDispatchOptions{
+	Limits: &dispatch.DynamicDispatchLimits{
+		CpuMs:       50,
+		SubRequests: 100,
+	},
+})
+```
+
+:::note
+The generated `Get(name, args, options)` method is still available when you need the raw `js.Value` of the returned Fetcher object.
+:::

@@ -1,0 +1,79 @@
+---
+title: Vectorize
+description: Query and mutate a Cloudflare Vectorize index from Go.
+sidebar:
+  badge: Experimental
+---
+
+[Cloudflare Vectorize](https://developers.cloudflare.com/vectorize/) is a vector database for similarity search over embeddings. The `exp/cloudflare/vectorize` package wraps the bound index.
+
+:::warning[Experimental]
+This package lives under `exp/cloudflare` and its API may change.
+:::
+
+## Declare the binding
+
+```toml
+[[vectorize]]
+binding = "INDEX"
+index_name = "my-index"
+```
+
+## Resolve the binding
+
+`vectorize.NewVectorize` resolves the binding by name and returns an error when no binding with that name exists.
+
+```go
+import "github.com/syumai/workers-go/exp/cloudflare/vectorize"
+
+index, err := vectorize.NewVectorize("INDEX")
+if err != nil {
+	// no binding named INDEX
+}
+```
+
+## Insert and upsert vectors
+
+`Insert` and `Upsert` take a `[]VectorizeVector` and return a `VectorizeAsyncMutation` — mutations are processed asynchronously and `MutationID` identifies the changeset. `Insert` errors when a provided ID already exists; `Upsert` replaces it.
+
+```go
+mutation, err := index.Upsert([]vectorize.VectorizeVector{
+	{ID: "1", Values: []float32{0.1, 0.2, 0.3}, Namespace: "docs"},
+	{ID: "2", Values: []float32{0.4, 0.5, 0.6},
+		Metadata: map[string]any{"title": "Getting started"}},
+})
+if err != nil {
+	return err
+}
+fmt.Println(mutation.MutationID)
+```
+
+## Query
+
+`Query` runs a similarity search with a vector; `QueryByID` does the same starting from a vector already in the index. `VectorizeQueryOptions` controls `TopK`, `Namespace`, `ReturnValues`, `ReturnMetadata` (a `js.Value`), and `Filter`.
+
+```go
+matches, err := index.Query(
+	[]float32{0.1, 0.2, 0.3},
+	vectorize.VectorizeQueryOptions{
+		TopK:         5,
+		ReturnValues: true,
+	},
+)
+if err != nil {
+	return err
+}
+for _, m := range matches.Matches {
+	fmt.Println(m.ID, m.Score)
+}
+```
+
+## Fetch and delete by ID
+
+```go
+vectors, err := index.GetByIds([]string{"1", "2"})
+
+mutation, err := index.DeleteByIds([]string{"1"})
+```
+
+`Describe` returns a `VectorizeIndexInfo` with `VectorCount`, `Dimensions`, and the last processed mutation.

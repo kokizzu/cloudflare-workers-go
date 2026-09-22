@@ -1,0 +1,46 @@
+---
+title: Pages Functions
+description: Serve dynamic routes on Cloudflare Pages with a Go Wasm function.
+---
+
+[Pages Functions](https://developers.cloudflare.com/pages/functions/) let you add dynamic routes to a Cloudflare Pages site. A workers-go function works the same way as on Workers — `workers.Serve` handles the request — only the project layout differs.
+
+## Project layout
+
+```txt
+functions/
+  api/
+    [[routes]].mjs   # catch-all entry point that loads the Wasm binary
+pages/
+  index.html         # static assets served by Pages
+main.go
+wrangler.toml
+```
+
+The `[[routes]].mjs` file is a Pages Functions catch-all route. It instantiates the Wasm module and forwards requests under `/api/*` to your Go handler.
+
+## Write the handler
+
+Any router works. This example uses chi:
+
+```go
+func main() {
+	r := chi.NewRouter()
+	r.Route("/api", func(r chi.Router) {
+		r.Get("/hello", func(w http.ResponseWriter, req *http.Request) {
+			name := req.URL.Query().Get("name")
+			if name == "" {
+				name = "Pages Functions"
+			}
+			fmt.Fprintf(w, "Hello, %s!", name)
+		})
+	})
+	workers.Serve(r)
+}
+```
+
+A request to `/api/hello?name=Go` is routed through `functions/api/[[routes]].mjs` into the Go handler and responds with `Hello, Go!`.
+
+## Example project
+
+[_examples/pages-functions](https://github.com/syumai/workers-go/tree/main/_examples/pages-functions)

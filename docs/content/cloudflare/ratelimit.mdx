@@ -1,0 +1,58 @@
+---
+title: Rate Limiting
+description: Enforce rate limits from a worker with the Rate Limiting binding.
+sidebar:
+  badge: Experimental
+---
+
+The [Rate Limiting binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/) lets a worker check and increment a rate limit counter. The `exp/cloudflare/ratelimit` package wraps it.
+
+:::warning[Experimental]
+This package lives under `exp/cloudflare` and its API may change.
+:::
+
+## Declare the binding
+
+```toml
+[[ratelimits]]
+name = "MY_RATE_LIMITER"
+namespace_id = "1001"
+simple = { limit = 100, period = 60 }
+```
+
+`namespace_id` identifies the counter namespace — bindings that share it, even across different workers, share counters for a given key. `simple.period` must be `10` or `60` seconds.
+
+## Check a key
+
+`ratelimit.NewRateLimit` resolves the binding by name. `Limit` increments the counter for `RateLimitOptions.Key` and returns a `RateLimitOutcome` whose `Success` field reports whether the key is under the limit.
+
+```go
+import (
+	"net/http"
+
+	"github.com/syumai/workers-go"
+	"github.com/syumai/workers-go/exp/cloudflare/ratelimit"
+)
+
+func main() {
+	workers.Serve(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		rl, err := ratelimit.NewRateLimit("MY_RATE_LIMITER")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		outcome, err := rl.Limit(ratelimit.RateLimitOptions{
+			Key: req.RemoteAddr,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !outcome.Success {
+			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
+		w.Write([]byte("ok"))
+	}))
+}
+```

@@ -1,0 +1,67 @@
+---
+title: Hyperdrive
+description: Connect to Postgres and MySQL through Cloudflare Hyperdrive using database/sql drivers.
+sidebar:
+  badge: Experimental
+---
+
+[Hyperdrive](https://developers.cloudflare.com/hyperdrive/) pools and accelerates connections to your existing Postgres or MySQL database. The `exp/cloudflare/hyperdrive` package wraps the Hyperdrive binding and bridges it to a standard `net.Conn`.
+
+:::warning[Experimental]
+This package lives under `exp/cloudflare` and its API may change.
+:::
+
+## Declare the binding
+
+```toml
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "<your hyperdrive configuration id>"
+```
+
+## Resolve the binding
+
+`hyperdrive.NewHyperdrive` resolves the binding by name and returns an error when no binding with that name exists.
+
+```go
+import "github.com/syumai/workers-go/exp/cloudflare/hyperdrive"
+
+h, err := hyperdrive.NewHyperdrive("HYPERDRIVE")
+if err != nil {
+	// no binding named HYPERDRIVE
+}
+```
+
+The binding exposes the connection parameters as methods: `ConnectionString()`, `Host()`, `Port()`, `User()`, `Password()`, `Database()`, and `IP()`.
+
+## Connect with database/sql
+
+`Connect` returns a `net.Conn` dialed to the Hyperdrive configuration's host and port over `cloudflare/sockets`. Register it as a custom dialer for your `database/sql` driver, then open the database with `ConnectionString()`.
+
+```go
+import (
+	"context"
+	"database/sql"
+	"net"
+
+	"github.com/go-sql-driver/mysql"
+	"github.com/syumai/workers-go/exp/cloudflare/hyperdrive"
+)
+
+h, err := hyperdrive.NewHyperdrive("HYPERDRIVE")
+if err != nil {
+	return err
+}
+
+mysql.RegisterDialContext("tcp", func(ctx context.Context, addr string) (net.Conn, error) {
+	return h.Connect(ctx)
+})
+
+db, err := sql.Open("mysql", h.ConnectionString())
+if err != nil {
+	return err
+}
+defer db.Close()
+```
+
+Postgres drivers that accept a custom dialer work the same way — pass `h.Connect` wherever the driver expects a `net.Conn` dial function.

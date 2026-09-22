@@ -1,0 +1,68 @@
+---
+title: Email Workers
+description: Receive inbound mail via Email Routing and send outbound mail from a Go worker.
+sidebar:
+  badge: Experimental
+---
+
+[Email Workers](https://developers.cloudflare.com/email-routing/email-workers/) let a Worker handle inbound mail routed by Email Routing, and send outbound mail through a `SendEmail` binding. The `exp/cloudflare/email` package covers both sides.
+
+:::warning[Experimental]
+The `exp/cloudflare/email` package lives under `exp/cloudflare` and is experimental. Its API is likely to change.
+:::
+
+## Handle inbound email
+
+`email.Handle` registers a `func(*email.ForwardableEmailMessage) error` as the worker's `email(message, env, ctx)` handler and blocks. There is no wrangler.toml key for the inbound trigger — create an Email Routing route with a "Send to a Worker" action pointing at this worker (Email > Email Routing in the dashboard).
+
+```go
+func main() {
+	email.Handle(func(msg *email.ForwardableEmailMessage) error {
+		log.Printf("from=%s to=%s size=%d", msg.From(), msg.To(), msg.RawSize())
+
+		// the destination must be a verified address on this zone
+		if _, err := msg.Forward("you@example.com", nil); err != nil {
+			return msg.SetReject("forwarding failed")
+		}
+		return nil
+	})
+}
+```
+
+- `msg.From()`, `msg.To()`, `msg.RawSize()` expose the envelope; `msg.Raw()` streams the raw MIME content as an `io.ReadCloser` and `msg.Headers()` returns an `http.Header`.
+- `msg.Forward(rcptTo, headers)` forwards to a verified destination address.
+- `msg.SetReject(reason)` returns a permanent SMTP error to the connecting client.
+- Returning an error is treated as a temporary failure — the message is not accepted and delivery may be retried.
+- `Handle` blocks; a worker that also serves HTTP should register other handlers and call a single blocking entry point such as `workers.Serve` instead.
+
+## Reply or send outbound mail
+
+Declare a `send_email` binding:
+
+```toml
+[[send_email]]
+name = "SEND_EMAIL"
+# destination_address = "you@example.com"   # optional: restrict to one verified address
+```
+
+Build an `*email.EmailMessage` with `email.NewEmailMessage(from, to, raw)` (raw MIME streamed from an `io.Reader`) or `email.NewEmailMessageString(from, to, raw)`, then pass its `JSValue()` to `Reply` or `Send`:
+
+```go
+sender, err := email.NewSendEmail("SEND_EMAIL")
+if err != nil {
+	return err
+}
+
+msg, err := email.NewEmailMessageString("bot@example.com", "user@example.com",
+	"Subject: hi\r\n\r\nHello from a Worker\r\n")
+if err != nil {
+	return err
+}
+res, err := sender.Send(msg.JSValue()) // res.MessageID
+```
+
+Inside an email handler, `msg.Reply(reply.JSValue())` replies to the original sender. `SendBuilder`/`ReplyBuilder` take the `EmailMessageBuilder`/`EmailReplyMessageBuilder` structs instead, for composing a message without writing raw MIME.
+
+## Example project
+
+[_examples/email-forward](https://github.com/syumai/workers-go/tree/main/_examples/email-forward) forwards inbound mail to a verified destination address.

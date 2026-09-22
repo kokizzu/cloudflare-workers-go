@@ -1,0 +1,56 @@
+---
+title: Analytics Engine
+description: Write data points to a Workers Analytics Engine dataset from Go.
+sidebar:
+  badge: Experimental
+---
+
+[Workers Analytics Engine](https://developers.cloudflare.com/analytics/analytics-engine/) is an analytics and logging datastore: a Worker writes data points to a bound dataset, and you query them later with the SQL API. The `exp/cloudflare/analytics` package wraps the bound dataset.
+
+:::warning[Experimental]
+This package lives under `exp/cloudflare` and its API may change.
+:::
+
+## Declare the binding
+
+```toml
+[[analytics_engine_datasets]]
+binding = "DATASET"
+dataset = "my_dataset"
+```
+
+The dataset is created automatically the first time you write to it.
+
+## Resolve the binding
+
+`analytics.NewAnalyticsEngineDataset` resolves the binding by name and returns an error when no binding with that name exists.
+
+```go
+import "github.com/syumai/workers-go/exp/cloudflare/analytics"
+
+dataset, err := analytics.NewAnalyticsEngineDataset("DATASET")
+if err != nil {
+	// no binding named DATASET
+}
+```
+
+## Write a data point
+
+`WriteDataPoint` writes a single `AnalyticsEngineDataPoint`:
+
+- `Indexes` — index strings used to sample the data point.
+- `Doubles` — numeric columns, written as `double1`, `double2`, ...
+- `Blobs` — string columns, written as `blob1`, `blob2`, ...
+
+```go
+err := dataset.WriteDataPoint(analytics.AnalyticsEngineDataPoint{
+	Indexes: []string{req.URL.Hostname()},
+	Blobs:   []string{req.Method, req.URL.Path},
+	Doubles: []float64{time.Since(start).Milliseconds()},
+})
+if err != nil {
+	return err
+}
+```
+
+Query the dataset later through the [Analytics Engine SQL API](https://developers.cloudflare.com/analytics/analytics-engine/sql-api/).

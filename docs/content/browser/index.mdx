@@ -1,0 +1,61 @@
+---
+title: Browser
+description: Run a Go HTTP server inside a browser tab with the browser-go template.
+---
+
+The `browser-go` template runs the same `http.Handler` inside a browser: the Go Wasm module loads in the page and exposes a `fetch` handler that JavaScript can call directly — no server round-trips. Cloudflare Workers is used only to serve the static page during development and deployment.
+
+## Create a project
+
+```bash
+npm create cloudflare@latest -- --template github.com/syumai/workers-go/_templates/browser/browser-go
+cd my-app
+go mod init
+go mod tidy
+npm start
+```
+
+Open http://localhost:8787 in your browser.
+
+## How it works
+
+The Wasm build produces a `worker.mjs` module whose `handlers.fetch` function accepts a standard `Request` and returns a `Response` — the same interface as on Cloudflare Workers. Your page constructs requests and renders the responses.
+
+```js
+import handlers from "./build/worker.mjs";
+
+const req = new Request("/add", {
+  method: "POST",
+  body: JSON.stringify({ a: 1, b: 2 }),
+});
+const res = await handlers.fetch(req);
+const text = await res.text();
+```
+
+On the Go side it is an ordinary `http.Handler`:
+
+```go
+func main() {
+	http.HandleFunc("POST /add", func(w http.ResponseWriter, req *http.Request) {
+		var addReq AddRequest
+		if err := json.NewDecoder(req.Body).Decode(&addReq); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		json.NewEncoder(w).Encode(addReq.A + addReq.B)
+	})
+	workers.Serve(nil)
+}
+```
+
+## Commands
+
+| Command | Description |
+| --- | --- |
+| `npm start` | Run the dev server |
+| `npm run build` | Build the Go Wasm binary |
+| `npm run deploy` | Deploy the static assets |
+
+## Example project
+
+[_examples/browser](https://github.com/syumai/workers-go/tree/main/_examples/browser) implements a small calculator API in the browser.

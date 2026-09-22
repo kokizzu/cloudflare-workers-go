@@ -1,0 +1,45 @@
+---
+title: TCP Sockets
+description: Open outbound TCP connections from a worker with the sockets API.
+---
+
+The `cloudflare/sockets` package wraps the Workers [Sockets API](https://developers.cloudflare.com/workers/runtime-apis/tcp-sockets/) and returns a standard `net.Conn`, so existing Go code that speaks TCP — databases, SMTP, Redis — can run on Workers.
+
+## Connect
+
+```go
+conn, err := sockets.Connect(req.Context(), "tcpbin.com:4242", nil)
+if err != nil {
+	return err
+}
+defer conn.Close()
+```
+
+The returned `net.Conn` supports `Read`, `Write`, `Close`, `LocalAddr`, `RemoteAddr`, and the deadline methods `SetDeadline`, `SetReadDeadline`, and `SetWriteDeadline`.
+
+```go
+conn.SetDeadline(time.Now().Add(time.Hour))
+conn.Write([]byte("hello.\n"))
+bts, err := bufio.NewReader(conn).ReadBytes('.')
+```
+
+## TLS
+
+Control TLS with `SocketOptions.SecureTransport`:
+
+- `sockets.SecureTransportOn` — use TLS from the start.
+- `sockets.SecureTransportOff` — plain TCP.
+- `sockets.SecureTransportStartTLS` — start plain and upgrade later with `StartTLS()`.
+
+```go
+conn, err := sockets.Connect(ctx, "example.com:587", &sockets.SocketOptions{
+	SecureTransport: sockets.SecureTransportStartTLS,
+	AllowHalfOpen:   true,
+})
+// ... SMTP EHLO/STARTTLS negotiation ...
+tlsConn := conn.(*sockets.Socket).StartTLS()
+```
+
+## Example project
+
+[_examples/sockets](https://github.com/syumai/workers-go/tree/main/_examples/sockets) echoes data over a raw TCP connection.

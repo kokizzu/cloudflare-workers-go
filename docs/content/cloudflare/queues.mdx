@@ -1,0 +1,85 @@
+---
+title: Queues
+description: Produce messages to and consume messages from Cloudflare Queues in Go.
+---
+
+[Cloudflare Queues](https://developers.cloudflare.com/queues/) is a message queue integrated with Workers. The `cloudflare/queues` package covers both sides: a `Producer` that sends messages and a `Consumer` that receives batches.
+
+## Declare the bindings
+
+```toml
+[[queues.producers]]
+queue = "my-queue"
+binding = "QUEUE"
+
+[[queues.consumers]]
+queue = "my-queue"
+max_batch_size = 1
+max_batch_timeout = 30
+max_retries = 10
+dead_letter_queue = "my-queue-dlq"
+```
+
+## Produce messages
+
+Create a producer with the binding name and send text, bytes, JSON, or a raw `js.Value`.
+
+```go
+q, err := queues.NewProducer("QUEUE")
+if err != nil {
+	return err
+}
+
+err = q.SendText("hello")
+err = q.SendBytes([]byte{0x01, 0x02})
+err = q.SendJSON(map[string]any{"a": 1})
+```
+
+Delayed delivery is configured per send:
+
+```go
+err = q.SendText("later", queues.WithDelaySeconds(30*time.Second))
+```
+
+## Produce a batch
+
+```go
+err = q.SendBatch([]*queues.MessageSendRequest{
+	queues.NewTextMessageSendRequest("first"),
+	queues.NewJSONMessageSendRequest(map[string]any{"n": 2}),
+	queues.NewBytesMessageSendRequest([]byte{0x03}),
+}, queues.WithBatchDelaySeconds(10*time.Second))
+```
+
+## Consume messages
+
+Register a `queues.Consumer` — a `func(batch *queues.MessageBatch) error` — with `queues.Consume`. When the worker also serves HTTP, use `queues.ConsumeNonBlock` together with `workers.Serve`.
+
+```go
+func consumeBatch(batch *queues.MessageBatch) error {
+	for _, m := range batch.Messages {
+		body, err := m.StringBody() // or m.BytesBody()
+		if err != nil {
+			m.Retry(queues.WithRetryDelay(5 * time.Second))
+			continue
+		}
+		fmt.Println(m.ID, m.Attempts, body)
+		m.Ack()
+	}
+	return nil
+}
+
+func main() {
+	queues.ConsumeNonBlock(consumeBatch)
+	workers.Serve(nil)
+}
+```
+
+- `Message` exposes `ID`, `Timestamp`, `Attempts`, and the raw `Body` (`js.Value`) plus `StringBody` / `BytesBody` helpers.
+- `m.Ack()` marks a message delivered; `m.Retry(...)` schedules redelivery.
+- `batch.AckAll()` and `batch.RetryAll(...)` apply to the whole batch. `batch.Queue` is the queue name.
+- Returning an error from the consumer retries the entire batch.
+
+## Example project
+
+[_examples/queues](https://github.com/syumai/workers-go/tree/main/_examples/queues) combines an HTTP producer endpoint with a consumer in one worker.

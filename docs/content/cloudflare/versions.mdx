@@ -1,0 +1,34 @@
+---
+title: Worker Versions
+description: Read version metadata (id, tag, timestamp) of the running worker version.
+sidebar:
+  badge: Experimental
+---
+
+The [version metadata binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/version-metadata/) exposes metadata about the worker version serving the current request — useful for version-aware logging and gradual deployments. The `exp/cloudflare/versions` package decodes it.
+
+:::warning[Experimental]
+This package lives under `exp/cloudflare` and its API may change.
+:::
+
+## Declare the binding
+
+```toml
+[version_metadata]
+binding = "CF_VERSION_METADATA"
+```
+
+## Read the metadata
+
+`versions.NewWorkerVersionMetadata` resolves the binding and returns a `WorkerVersionMetadata` struct with `ID`, `Tag`, and `Timestamp` fields.
+
+```go
+import "github.com/syumai/workers-go/exp/cloudflare/versions"
+
+meta, err := versions.NewWorkerVersionMetadata("CF_VERSION_METADATA")
+if err != nil {
+	return err
+}
+
+fmt.Println(meta.ID, meta.Tag, meta.Timestamp)
+```

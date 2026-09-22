@@ -1,0 +1,72 @@
+---
+title: Cloudflare
+description: Run an http.Handler on Cloudflare Workers and Pages Functions, and bind Workers platform features to your Go code.
+---
+
+The `cloudflare` package and its sub-packages expose the Cloudflare Workers platform to Go. Compile your program with `GOOS=js GOARCH=wasm` and the same `http.Handler` you would run anywhere else serves requests on Workers.
+
+## Serve an http.Handler
+
+Pass your handler to `workers.Serve()`. When `nil` is given, `http.DefaultServeMux` is used, so you can register routes with the standard `http.Handle` and `http.HandleFunc` — or plug in any third-party router such as chi.
+
+```go
+package main
+
+import (
+	"fmt"
+	"net/http"
+
+	"github.com/syumai/workers-go"
+)
+
+func main() {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		fmt.Fprint(w, "Hello, Cloudflare Workers!")
+	})
+	workers.Serve(handler)
+}
+```
+
+## Combine multiple triggers
+
+A Worker can handle more than fetch events — for example an HTTP server plus a Cron Trigger or a Queues consumer. Use the non-blocking setup functions, signal readiness yourself, and wait on the Done channels.
+
+```go
+func main() {
+	workers.ServeNonBlock(handler)
+	cron.ScheduleTaskNonBlock(task)
+
+	// send a ready signal to the runtime
+	workers.Ready()
+
+	// block until the handler or task is done
+	select {
+	case <-workers.Done():
+	case <-cron.Done():
+	}
+}
+```
+
+- `workers.ServeNonBlock(handler)` registers the handler without blocking.
+- `workers.Ready()` tells the runtime that all handlers are set up.
+- `workers.Done()` returns a channel that closes when the worker is done.
+
+## Run locally without JavaScript
+
+When built for a non-JS target, `workers.Serve()` starts a normal HTTP server on `:9900` (or the `PORT` environment variable). This is handy for debugging handler logic without the Wasm toolchain, but Cloudflare-specific APIs are unavailable in this mode.
+
+## Bindings
+
+Workers features — KV namespaces, R2 buckets, D1 databases, Queues, Durable Objects, Service Bindings — are attached to your worker as **bindings** in `wrangler.toml` or `wrangler.jsonc`. Each feature page in this section shows the binding declaration it needs.
+
+In Go, you resolve a binding by the name you configured:
+
+```go
+counterKV, err := kv.NewNamespace("COUNTER") // binding name in wrangler.toml
+```
+
+Bindings are read from the runtime context of the current request, so resolve them inside a handler rather than at package init time.
+
+## Examples
+
+The [_examples](https://github.com/syumai/workers-go/tree/main/_examples) directory in the repository contains a runnable project for almost every feature described here. Each feature page links to its example.
