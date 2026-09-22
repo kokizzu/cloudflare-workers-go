@@ -168,7 +168,7 @@ func (fk *fakeKV) lookup(key string) *fakeKVEntry {
 }
 
 // has reports whether key is currently stored, bypassing Namespace's get
-// (and its "<null>" quirk on a miss, see TestNamespace_GetString_missing).
+// (and its ErrNotFound-on-miss behavior, see TestNamespace_GetString_missing).
 func (fk *fakeKV) has(key string) bool {
 	fk.mu.Lock()
 	defer fk.mu.Unlock()

@@ -94,12 +94,23 @@ func newFakeBucket(t testing.TB) *fakeBucket {
 		return jstest.Resolved(fb.entryToJS(e, false))
 	})
 
+	// r2js.R2Bucket.Delete always sends its keys as a JS array (R2Bucket's
+	// only generated delete overload is the bulk keys:string[] form; see
+	// exp/cloudflare/r2/zr2_gen.go's R2Bucket.Delete), even for
+	// r2.Bucket.Delete's single-key call, so this reads args[0] as an array
+	// rather than a single string.
 	deleteFn := jstest.Func(t, func(_ js.Value, args []js.Value) any {
-		key := args[0].String()
+		keysArr := args[0]
 		fb.mu.Lock()
-		delete(fb.entries, key)
+		for i := 0; i < keysArr.Length(); i++ {
+			delete(fb.entries, keysArr.Index(i).String())
+		}
 		fb.mu.Unlock()
-		fb.record(fakeR2Call{Method: "delete", Key: key})
+		var lastKey string
+		if n := keysArr.Length(); n > 0 {
+			lastKey = keysArr.Index(n - 1).String()
+		}
+		fb.record(fakeR2Call{Method: "delete", Key: lastKey})
 		return jstest.Resolved(js.Undefined())
 	})
 

@@ -3,6 +3,7 @@
 package kv
 
 import (
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -109,6 +110,9 @@ func TestNamespace_List_prefixLimitCursor(t *testing.T) {
 	if !res2.ListComplete {
 		t.Errorf("ListComplete = false, want true (no more results)")
 	}
+	if res2.Cursor != "" {
+		t.Errorf("Cursor = %q, want empty when the list is complete", res2.Cursor)
+	}
 }
 
 func TestNamespace_Delete(t *testing.T) {
@@ -134,13 +138,11 @@ func TestNamespace_Delete(t *testing.T) {
 	}
 }
 
-// TestNamespace_GetString_missing fixes the current, arguably surprising,
-// behavior of GetString on a miss: the real KV get() resolves with null,
-// and GetString does not special-case that (unlike r2.Bucket.Get, which
-// checks v.IsNull() and returns (nil, nil)). js.Value.String() on a null
-// value does not panic; per its doc comment, it returns the placeholder
-// "<null>". So GetString currently returns ("<null>", nil), not ("", nil)
-// or an error, on a miss.
+// TestNamespace_GetString_missing fixes the current behavior of GetString
+// on a miss: the real KV get() resolves with null, kvjs.KVNamespace.GetText
+// decodes a null result to a nil *string (see jsrt.IsNil), and GetString
+// turns that nil into ErrNotFound rather than returning a zero value or the
+// underlying JS "null" placeholder.
 func TestNamespace_GetString_missing(t *testing.T) {
 	fk := newFakeKV(t)
 	jstest.SetEnv(t, map[string]any{"KV": fk.value})
@@ -151,11 +153,32 @@ func TestNamespace_GetString_missing(t *testing.T) {
 	}
 
 	got, err := ns.GetString("missing", nil)
-	if err != nil {
-		t.Fatalf("GetString: %v", err)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetString(missing) error = %v, want ErrNotFound", err)
 	}
-	if got != "<null>" {
-		t.Errorf("GetString(missing) = %q, want %q", got, "<null>")
+	if got != "" {
+		t.Errorf("GetString(missing) = %q, want empty string", got)
+	}
+}
+
+// TestNamespace_GetReader_missing mirrors TestNamespace_GetString_missing
+// for GetReader: a miss decodes to a nil io.ReadCloser from
+// kvjs.KVNamespace.GetStream, which GetReader turns into ErrNotFound.
+func TestNamespace_GetReader_missing(t *testing.T) {
+	fk := newFakeKV(t)
+	jstest.SetEnv(t, map[string]any{"KV": fk.value})
+
+	ns, err := NewNamespace("KV")
+	if err != nil {
+		t.Fatalf("NewNamespace: %v", err)
+	}
+
+	got, err := ns.GetReader("missing", nil)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetReader(missing) error = %v, want ErrNotFound", err)
+	}
+	if got != nil {
+		t.Errorf("GetReader(missing) = %v, want nil", got)
 	}
 }
 

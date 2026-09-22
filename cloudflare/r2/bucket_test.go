@@ -8,6 +8,8 @@ import (
 	"syscall/js"
 	"testing"
 
+	r2js "github.com/syumai/workers-go/exp/cloudflare/r2"
+
 	"github.com/syumai/workers-go/internal/jstest"
 )
 
@@ -99,10 +101,11 @@ func TestBucket_Head(t *testing.T) {
 }
 
 // TestBucket_Get_missing fixes the current behavior of Get on a miss: the
-// real R2 get() resolves with null, and Bucket.Get checks v.IsNull() before
-// converting, returning (nil, nil). Unlike kv.Namespace.GetString (see its
-// TestNamespace_GetString_missing), this does not panic or produce a
-// placeholder value.
+// real R2 get() resolves with null, which the generated R2Bucket.Get
+// decodes to a nil *r2js.R2ObjectBody (via jsrt.IsNil), and Bucket.Get
+// turns that into (nil, nil). Unlike kv.Namespace.GetString/GetReader,
+// which return ErrNotFound on a miss (see TestNamespace_GetString_missing),
+// r2.Bucket.Get signals a miss with a nil *Object and no error.
 func TestBucket_Get_missing(t *testing.T) {
 	fb := newFakeBucket(t)
 	jstest.SetEnv(t, map[string]any{"BUCKET": fb.value})
@@ -177,7 +180,7 @@ func TestBucket_List(t *testing.T) {
 func TestObject_BodyUsed(t *testing.T) {
 	t.Run("present", func(t *testing.T) {
 		v := js.ValueOf(map[string]any{"bodyUsed": true})
-		obj := &Object{instance: v}
+		obj := &Object{instance: r2js.R2ObjectFromJS(v)}
 		got, err := obj.BodyUsed()
 		if err != nil {
 			t.Fatalf("BodyUsed: %v", err)
@@ -189,7 +192,7 @@ func TestObject_BodyUsed(t *testing.T) {
 
 	t.Run("missing", func(t *testing.T) {
 		v := js.ValueOf(map[string]any{})
-		obj := &Object{instance: v}
+		obj := &Object{instance: r2js.R2ObjectFromJS(v)}
 		_, err := obj.BodyUsed()
 		if err == nil {
 			t.Fatalf("BodyUsed() error = nil, want an error")

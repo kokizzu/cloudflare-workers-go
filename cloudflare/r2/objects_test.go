@@ -8,33 +8,33 @@ import (
 	"testing"
 	"time"
 
+	r2js "github.com/syumai/workers-go/exp/cloudflare/r2"
+
 	"github.com/syumai/workers-go/internal/jsutil"
 )
 
 func TestToObjects(t *testing.T) {
 	uploaded := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	obj := func(key string, size int) map[string]any {
-		return map[string]any{
+	obj := func(key string, size int) *r2js.R2Object {
+		v := js.ValueOf(map[string]any{
 			"key":      key,
 			"version":  "v1",
 			"size":     size,
 			"etag":     "e-" + key,
 			"httpEtag": "e-" + key,
 			"uploaded": jsutil.TimeToDate(uploaded),
-		}
+		})
+		return r2js.R2ObjectFromJS(v)
 	}
 
-	v := js.ValueOf(map[string]any{
-		"objects":           []any{obj("a", 1), obj("b", 2)},
-		"truncated":         true,
-		"cursor":            "next-cursor",
-		"delimitedPrefixes": []any{"a/", "b/"},
-	})
-
-	got, err := toObjects(v)
-	if err != nil {
-		t.Fatalf("toObjects: %v", err)
+	in := r2js.R2Objects{
+		Objects:           []*r2js.R2Object{obj("a", 1), obj("b", 2)},
+		Truncated:         true,
+		Cursor:            "next-cursor",
+		DelimitedPrefixes: []string{"a/", "b/"},
 	}
+
+	got := toObjects(in)
 	if len(got.Objects) != 2 {
 		t.Fatalf("len(Objects) = %d, want 2", len(got.Objects))
 	}
@@ -56,16 +56,13 @@ func TestToObjects(t *testing.T) {
 }
 
 func TestToObjects_cursorMissing(t *testing.T) {
-	v := js.ValueOf(map[string]any{
-		"objects":           []any{},
-		"truncated":         false,
-		"delimitedPrefixes": []any{},
-	})
-
-	got, err := toObjects(v)
-	if err != nil {
-		t.Fatalf("toObjects: %v", err)
+	in := r2js.R2Objects{
+		Objects:           nil,
+		Truncated:         false,
+		DelimitedPrefixes: nil,
 	}
+
+	got := toObjects(in)
 	if len(got.Objects) != 0 {
 		t.Errorf("len(Objects) = %d, want 0", len(got.Objects))
 	}
