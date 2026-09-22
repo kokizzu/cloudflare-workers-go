@@ -47,13 +47,25 @@ func main() {
 		os.Exit(1)
 		return
 	}
+	durableObjectNames, err := parseClassNames(durableObjects)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "err: -durable-objects: %v", err)
+		os.Exit(1)
+		return
+	}
+	workflowNames, err := parseClassNames(workflows)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "err: -workflows: %v", err)
+		os.Exit(1)
+		return
+	}
 	entrypointSpecs, err := parseEntrypoints(entrypoints)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "err: %v", err)
 		os.Exit(1)
 		return
 	}
-	if err := runMain(Mode(mode), Runtime(runtime), buildDirPath, parseClassNames(durableObjects), parseClassNames(workflows), entrypointSpecs); err != nil {
+	if err := runMain(Mode(mode), Runtime(runtime), buildDirPath, durableObjectNames, workflowNames, entrypointSpecs); err != nil {
 		fmt.Fprintf(os.Stderr, "err: %v", err)
 		os.Exit(1)
 	}
@@ -62,17 +74,26 @@ func main() {
 // parseClassNames splits a comma-separated flag value (-durable-objects or
 // -workflows) into class names, dropping empty entries (so "" produces nil,
 // and stray whitespace/commas like "Counter, ,Room" don't produce blank
-// class names).
-func parseClassNames(s string) []string {
+// class names). It returns an error if the same name appears more than once:
+// each name becomes its own top-level "export class Name ..." in the
+// generated worker.mjs, and two of those sharing a name is a JS SyntaxError
+// ("Identifier 'Name' has already been declared") at `node --check`/deploy
+// time rather than a clear error from this tool.
+func parseClassNames(s string) ([]string, error) {
 	var names []string
+	seen := map[string]bool{}
 	for _, name := range strings.Split(s, ",") {
 		name = strings.TrimSpace(name)
 		if name == "" {
 			continue
 		}
+		if seen[name] {
+			return nil, fmt.Errorf("duplicate class name %q", name)
+		}
+		seen[name] = true
 		names = append(names, name)
 	}
-	return names
+	return names, nil
 }
 
 // entrypointSpec is one parsed -entrypoints item: a WorkerEntrypoint class
@@ -89,8 +110,21 @@ type entrypointSpec struct {
 // "Name:method1,method2,..." (comma-separated method names). Stray
 // whitespace and empty items/methods (e.g. "MyService: ,greet") are
 // dropped. "" produces nil.
+//
+// It returns an error if:
+//   - a class Name repeats (two specs would produce the same top-level
+//     "export class Name ..." -- a JS SyntaxError, like parseClassNames);
+//   - a method name repeats within one spec (the generated subclass would
+//     define the method twice; the second definition silently wins, so the
+//     first is dead code);
+//   - a method is named "fetch": every generated subclass already gets its
+//     own `async fetch(req)` forwarding to handleEntrypointFetch, appended
+//     after any RPC methods, so an RPC method also named "fetch" would be
+//     silently shadowed by it (the RPC method becomes unreachable) rather
+//     than raising any error.
 func parseEntrypoints(s string) ([]entrypointSpec, error) {
 	var specs []entrypointSpec
+	seenNames := map[string]bool{}
 	for _, item := range strings.Split(s, ";") {
 		item = strings.TrimSpace(item)
 		if item == "" {
@@ -101,12 +135,24 @@ func parseEntrypoints(s string) ([]entrypointSpec, error) {
 		if name == "" {
 			return nil, fmt.Errorf("-entrypoints: empty class name in %q", item)
 		}
+		if seenNames[name] {
+			return nil, fmt.Errorf("-entrypoints: duplicate class name %q", name)
+		}
+		seenNames[name] = true
 		var methods []string
+		seenMethods := map[string]bool{}
 		for _, m := range strings.Split(methodsPart, ",") {
 			m = strings.TrimSpace(m)
 			if m == "" {
 				continue
 			}
+			if m == "fetch" {
+				return nil, fmt.Errorf("-entrypoints: %q: method name \"fetch\" is reserved for the generated fetch() trigger", name)
+			}
+			if seenMethods[m] {
+				return nil, fmt.Errorf("-entrypoints: %q: duplicate method name %q", name, m)
+			}
+			seenMethods[m] = true
 			methods = append(methods, m)
 		}
 		specs = append(specs, entrypointSpec{Name: name, Methods: methods})
@@ -114,7 +160,41 @@ func parseEntrypoints(s string) ([]entrypointSpec, error) {
 	return specs, nil
 }
 
+// validateClassNames ensures no class name is reused across
+// -durable-objects, -workflows, and -entrypoints: parseClassNames/
+// parseEntrypoints each already reject a repeat within their own flag, but a
+// name shared *across* flags (e.g. -durable-objects=Foo -workflows=Foo)
+// would still produce two top-level "export class Foo ..." in worker.mjs --
+// a JS SyntaxError at `node --check`/deploy time -- so it's checked here,
+// once all three are parsed.
+func validateClassNames(durableObjects, workflows []string, entrypoints []entrypointSpec) error {
+	seen := map[string]string{} // class name -> the flag that first used it
+	check := func(flag string, names ...string) error {
+		for _, name := range names {
+			if from, ok := seen[name]; ok {
+				return fmt.Errorf("class name %q is used by both %s and %s", name, from, flag)
+			}
+			seen[name] = flag
+		}
+		return nil
+	}
+	if err := check("-durable-objects", durableObjects...); err != nil {
+		return err
+	}
+	if err := check("-workflows", workflows...); err != nil {
+		return err
+	}
+	entrypointNames := make([]string, len(entrypoints))
+	for i, ep := range entrypoints {
+		entrypointNames[i] = ep.Name
+	}
+	return check("-entrypoints", entrypointNames...)
+}
+
 func runMain(mode Mode, runtime Runtime, buildDirPath string, durableObjects, workflows []string, entrypoints []entrypointSpec) error {
+	if err := validateClassNames(durableObjects, workflows, entrypoints); err != nil {
+		return err
+	}
 	if err := os.RemoveAll(buildDirPath); err != nil {
 		return err
 	}
