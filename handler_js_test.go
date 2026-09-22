@@ -84,6 +84,14 @@ func TestHandleRequest_beforeServe(t *testing.T) {
 func TestServe_blocksUntilDone(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// A background task that outlives the response (this is what
+		// cloudflare.WaitUntil registers via jsutil.TrackBackgroundTask):
+		// Done must not close - and Serve must not return - while it is
+		// still running, or resuming the parked goroutine would hit
+		// "Go program has already exited".
+		jsutil.TrackBackgroundTask(func() {
+			time.Sleep(300 * time.Millisecond)
+		})
 		w.Write([]byte("ok"))
 	})
 
@@ -106,10 +114,18 @@ func TestServe_blocksUntilDone(t *testing.T) {
 		t.Errorf("body = %q, want %q", body, "ok")
 	}
 
+	// The response body is fully read, but the tracked background task is
+	// still sleeping: Serve must keep blocking until it finishes.
+	select {
+	case <-serveReturned:
+		t.Fatalf("Serve returned while a background task was still running")
+	case <-time.After(100 * time.Millisecond):
+	}
+
 	select {
 	case <-serveReturned:
 	case <-time.After(5 * time.Second):
-		t.Fatalf("Serve did not return after the response body was fully read")
+		t.Fatalf("Serve did not return after the background task finished")
 	}
 }
 

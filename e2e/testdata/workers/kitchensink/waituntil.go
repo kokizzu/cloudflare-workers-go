@@ -24,14 +24,6 @@ const waitUntilValue = "done"
 // cloudflare.WaitUntil, i.e. after the response has gone out) writes
 // waitUntilValue to KV. GET /waituntil/result lets a test observe when
 // that write actually lands.
-//
-// NOTE: under a real `wrangler dev` (workerd) runtime, resuming this
-// goroutine from time.Sleep's scheduled timer reliably fails with "Go
-// program has already exited", and the request is then canceled by the
-// runtime as hung -- reproduced with delays as short as 10ms. This is a
-// real SDK/runtime interaction the e2e test intentionally exercises and
-// reports as a known issue (see e2e/http_test.go's
-// waituntil/runs_after_response subtest) rather than papering over here.
 func handleWaitUntil(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)

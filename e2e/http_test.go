@@ -212,17 +212,7 @@ func TestKitchenSink(t *testing.T) {
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
-		// Confirmed against a real `wrangler dev` (workerd) runtime: resuming
-		// a goroutine parked in time.Sleep from inside a cloudflare.WaitUntil
-		// task reliably fails with "Go program has already exited" once the
-		// scheduled timer fires (reproduced with delays as short as 10ms),
-		// and the runtime then cancels the request as hung -- so the KV
-		// write this subtest waits for never lands. The fixture's
-		// handleWaitUntil (testdata/workers/kitchensink/waituntil.go) still
-		// implements the intended 100ms-delayed write so this stays easy to
-		// re-check if the underlying issue is ever fixed: tighten this back
-		// into a t.Fatalf instead of skipping once it starts passing.
-		t.Skipf("known issue: time.Sleep inside a cloudflare.WaitUntil goroutine breaks under wrangler dev (\"Go program has already exited\" / request canceled as hung); last GET /waituntil/result status = %d, body = %q", lastResp.StatusCode, lastBody)
+		t.Fatalf("waitUntil task did not write %q to KV within %v; last GET /waituntil/result status = %d, body = %q", "done", waitUntilPollTimeout, lastResp.StatusCode, lastBody)
 	})
 
 	t.Run("kv/put_get", testKVPutGet(w))

@@ -81,8 +81,4 @@ Package-specific fakes (`fake_kv_test.go`, `fake_bucket_test.go`,
 
 ## Known issues pinned by skipped tests
 
-Search for `t.Skip("known issue` to find them. At the time of writing:
-
-- `cloudflare.WaitUntil`: resuming a goroutine from a timer inside the
-  `waitUntil` callback fails with "Go program has already exited" under
-  workerd (E2E `waituntil/runs_after_response`).
+Search for `t.Skip("known issue` to find them. There are currently none.
