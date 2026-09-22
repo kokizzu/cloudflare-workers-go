@@ -1,0 +1,51 @@
+---
+title: Durable Objects
+description: Call Durable Object stubs from a Go worker.
+sidebar:
+  badge: Experimental
+---
+
+:::warning[Experimental]
+Only **calling stubs** is implemented — a Go worker can fetch a Durable Object stub and send it HTTP requests, but you cannot implement the Durable Object class itself in Go yet. Write the class in JavaScript and call it from Go.
+:::
+
+## Declare the binding
+
+```toml
+[durable_objects]
+bindings = [{ name = "COUNTER", class_name = "Counter" }]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Counter"]
+```
+
+## Call a stub
+
+Resolve the namespace, derive an ID with `IdFromName`, get the stub, and call `Fetch` with an ordinary `*http.Request`.
+
+```go
+ns, err := cloudflare.NewDurableObjectNamespace("COUNTER")
+if err != nil {
+	panic(err) // no binding named COUNTER
+}
+
+id := ns.IdFromName("A")
+stub, err := ns.Get(id)
+if err != nil {
+	panic(err)
+}
+
+res, err := stub.Fetch(req)
+if err != nil {
+	panic(err)
+}
+defer res.Body.Close()
+count, err := io.ReadAll(res.Body)
+```
+
+The request is forwarded as-is, so the Durable Object sees the same method, path, headers, and body.
+
+## Example project
+
+[_examples/durable-object-counter](https://github.com/syumai/workers-go/tree/main/_examples/durable-object-counter) forwards requests to a JavaScript counter object.

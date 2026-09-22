@@ -1,0 +1,60 @@
+---
+title: Introduction
+description: workers-go is a Go module that runs an HTTP server written in Go on Cloudflare Workers and in the browser.
+sidebar:
+  label: Introduction
+  order: 0
+---
+
+`workers-go` is a Go module for running an `http.Handler` written in Go on [Cloudflare Workers](https://workers.cloudflare.com/) and, with the browser template, directly in the browser. Your Go code is compiled to WebAssembly, and this package bridges the JavaScript runtime APIs to idiomatic Go types.
+
+:::warning
+This project is experimental. APIs may change between releases.
+:::
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" href="/quickstart" icon="rocket">
+    Create and deploy your first worker in minutes.
+  </Card>
+  <Card title="Cloudflare" href="/cloudflare" icon="cloud">
+    Serve http.Handler and use KV, R2, D1, Queues, Cron, and more.
+  </Card>
+  <Card title="Browser" href="/browser" icon="globe">
+    Serve HTTP from a Go Wasm binary running in the browser.
+  </Card>
+</CardGroup>
+
+## Platforms
+
+This documentation is organized per platform. Each platform section explains how to use every supported feature.
+
+- **Cloudflare** — run on Cloudflare Workers or Pages Functions, with bindings for KV, R2, D1, Durable Objects, Queues, Cron Triggers, the Cache API, Service Bindings, and TCP Sockets.
+- **Browser** — run the same `http.Handler` inside a browser tab using the `browser-go` template.
+
+## Feature support
+
+| Feature | Status |
+| --- | --- |
+| Serve `http.Handler` | Stable |
+| Environment variables and bindings | Stable |
+| KV | Stable (method options are not fully implemented) |
+| R2 | Stable (method options are not fully implemented) |
+| Cache API | Stable |
+| Durable Objects | Experimental — calling stubs only |
+| D1 | Experimental (alpha) |
+| Queues (producer and consumer) | Stable |
+| Cron Triggers | Stable |
+| FetchEvent (`waitUntil`, `passThroughOnException`) | Stable |
+| Outbound fetch and Service Bindings | Stable |
+| TCP Sockets | Stable |
+| Hono middleware (`exp/hono`) | Experimental |
+
+## Installation
+
+```bash
+go get github.com/syumai/workers-go
+```
+
+:::note
+This module was published as `github.com/syumai/workers` up to v0.34.0 and renamed to `github.com/syumai/workers-go` in v0.35.0. The old path still works as a deprecated forwarding module — see the [README](https://github.com/syumai/workers-go#migrating-from-githubcomsyumaiworkers) for migration steps.
+:::

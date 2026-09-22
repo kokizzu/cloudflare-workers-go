@@ -1,0 +1,14 @@
+{
+  "name": "workers-go-docs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "blume dev",
+    "build": "blume build",
+    "preview": "blume preview",
+    "check": "blume check"
+  },
+  "dependencies": {
+    "blume": "^1.7.3"
+  }
+}

@@ -1,0 +1,85 @@
+---
+title: KV
+description: Read, write, list, and delete keys in a Cloudflare Workers KV namespace from Go.
+---
+
+[Workers KV](https://developers.cloudflare.com/kv/) is a global, low-latency key-value store. The `cloudflare/kv` package wraps a bound KV namespace.
+
+## Declare the binding
+
+```toml
+[[kv_namespaces]]
+binding = "COUNTER"
+id = "<your namespace id>"
+```
+
+## Connect to a namespace
+
+`kv.NewNamespace` resolves the binding by name and returns an error when no binding with that name exists.
+
+```go
+counterKV, err := kv.NewNamespace("COUNTER")
+if err != nil {
+	// no binding named COUNTER
+}
+```
+
+## Get a value
+
+`GetString` reads a value as a string and `GetReader` streams it as an `io.Reader`. Both accept `*kv.GetOptions`; pass `nil` for defaults.
+
+```go
+value, err := counterKV.GetString("count", nil)
+
+r, err := counterKV.GetReader("image", &kv.GetOptions{
+	CacheTTL: 3600, // cache the value at the edge for this many seconds
+})
+```
+
+## Put a value
+
+`PutString` stores a string and `PutReader` stores the contents of an `io.Reader`. `PutReader` copies the full body into memory.
+
+```go
+err := counterKV.PutString("count", "42", nil)
+
+err = counterKV.PutString("session", token, &kv.PutOptions{
+	ExpirationTTL: 3600, // expire after this many seconds
+	// Expiration: 1735689600, // or an absolute Unix timestamp
+})
+```
+
+## Delete a key
+
+```go
+err := counterKV.Delete("count")
+```
+
+## List keys
+
+`List` returns up to `Limit` keys, optionally filtered by `Prefix`. When `ListComplete` is false, pass the returned `Cursor` back to fetch the next page.
+
+```go
+res, err := counterKV.List(&kv.ListOptions{
+	Prefix: "user:",
+	Limit:  100,
+})
+if err != nil {
+	return err
+}
+for _, key := range res.Keys {
+	fmt.Println(key.Name, key.Expiration)
+}
+if !res.ListComplete {
+	nextCursor := res.Cursor
+	_ = nextCursor // pass as ListOptions.Cursor for the next page
+}
+```
+
+:::note
+The `PutOptions.Metadata` field and `ListKey.Metadata` are not implemented yet. See the [feature support table](/#feature-support).
+:::
+
+## Example project
+
+[_examples/kv-counter](https://github.com/syumai/workers-go/tree/main/_examples/kv-counter) implements a page-view counter backed by KV.

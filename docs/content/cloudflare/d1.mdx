@@ -1,0 +1,67 @@
+---
+title: D1
+description: Query a Cloudflare D1 database from Go through the standard database/sql interface.
+sidebar:
+  badge: Experimental
+---
+
+[Cloudflare D1](https://developers.cloudflare.com/d1/) is a serverless SQL database. The `cloudflare/d1` package implements a `database/sql` driver, so you query D1 with the standard Go API.
+
+:::warning[Experimental]
+D1 support is alpha quality. The driver covers preparing, executing, and querying statements, but transactions are not supported — `Begin` and `BeginTx` return an error.
+:::
+
+## Declare the binding
+
+```toml
+[[d1_databases]]
+binding = "DB"
+database_name = "my-database"
+database_id = "<your database id>"
+```
+
+## Open the database
+
+Import the package for side effects to register the `d1` driver, then call `sql.Open` with the binding name as the DSN.
+
+```go
+import (
+	"database/sql"
+
+	_ "github.com/syumai/workers-go/cloudflare/d1" // register driver
+)
+
+db, err := sql.Open("d1", "DB")
+if err != nil {
+	log.Fatalf("error opening DB: %s", err.Error())
+}
+```
+
+## Query
+
+Use `database/sql` as usual — `QueryContext`, `ExecContext`, prepared statements, and `sql.Result` (`LastInsertId`, `RowsAffected`) all work.
+
+```go
+rows, err := db.QueryContext(ctx, "SELECT id, title FROM articles")
+if err != nil {
+	return err
+}
+defer rows.Close()
+
+for rows.Next() {
+	var id, title string
+	if err := rows.Scan(&id, &title); err != nil {
+		return err
+	}
+	fmt.Println(id, title)
+}
+
+res, err := db.ExecContext(ctx,
+	"INSERT INTO articles (id, title, body) VALUES (?, ?, ?)",
+	id, title, body,
+)
+```
+
+## Example project
+
+[_examples/d1-blog-server](https://github.com/syumai/workers-go/tree/main/_examples/d1-blog-server) is a blog server backed by D1.

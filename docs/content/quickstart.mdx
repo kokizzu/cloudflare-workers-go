@@ -1,0 +1,80 @@
+---
+title: Quickstart
+description: Create a workers-go project from the Cloudflare template, run it locally, and deploy it.
+sidebar:
+  label: Quickstart
+  order: 1
+---
+
+The fastest way to start is the `Deploy to Cloudflare` button on the [repository README](https://github.com/syumai/workers-go), which creates and deploys a project for you. To create a project manually, follow the steps below.
+
+## Requirements
+
+- Node.js (and npm)
+- Go 1.24.0 or later
+
+## Create a project
+
+<Steps>
+  <Step title="Create a new Worker project">
+    Scaffold a project from the `worker-go` template.
+
+    ```bash
+    npm create cloudflare@latest -- --template github.com/syumai/workers-go/_templates/cloudflare/worker-go
+    ```
+
+    For a smaller Wasm binary, use the TinyGo template instead. It requires TinyGo 0.42.0 or later — TinyGo 0.41.x cannot build `net/http` for Wasm.
+
+    ```bash
+    npm create cloudflare@latest -- --template github.com/syumai/workers-go/_templates/cloudflare/worker-tinygo
+    ```
+  </Step>
+  <Step title="Initialize Go modules">
+    ```bash
+    cd my-app
+    go mod init
+    go mod tidy
+    ```
+  </Step>
+  <Step title="Start the dev server">
+    ```bash
+    npm start
+    ```
+  </Step>
+  <Step title="Verify the worker">
+    ```bash
+    curl http://localhost:8787/hello
+    ```
+
+    You will see **"Hello!"** as the response.
+  </Step>
+</Steps>
+
+## Write your handler
+
+Implement an `http.Handler` and pass it to `workers.Serve()`.
+
+```go
+package main
+
+import (
+	"net/http"
+
+	"github.com/syumai/workers-go"
+)
+
+func main() {
+	http.HandleFunc("/hello", func(w http.ResponseWriter, req *http.Request) {
+		w.Write([]byte("Hello!"))
+	})
+	workers.Serve(nil) // if nil is given, http.DefaultServeMux is used
+}
+```
+
+## Deploy
+
+```bash
+npm run deploy
+```
+
+The build pipeline of the template compiles your Go code to Wasm and copies the runtime assets — see [Build and deploy](/cloudflare/build) for how it works under the hood.
