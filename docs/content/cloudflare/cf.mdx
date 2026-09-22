@@ -1,0 +1,44 @@
+---
+title: Request metadata (request.cf)
+description: Read Cloudflare edge request metadata — colo, country, ASN, TLS info — from request.cf.
+sidebar:
+  badge: Experimental
+---
+
+Cloudflare's edge attaches metadata to every incoming request, exposed on the underlying Fetch API `Request` as `request.cf`. The `exp/cloudflare/cf` package decodes it into a Go struct.
+
+:::warning[Experimental]
+This package lives under `exp/cloudflare` and its API may change.
+:::
+
+## Read from a request
+
+Inside a `workers.Serve` handler, `cf.FromRequest` extracts the `cf` object from the `*http.Request` and decodes it into an `IncomingRequestCFProperties`.
+
+```go
+import (
+	"fmt"
+	"net/http"
+
+	"github.com/syumai/workers-go"
+	"github.com/syumai/workers-go/exp/cloudflare/cf"
+)
+
+func main() {
+	workers.Serve(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		props, err := cf.FromRequest(req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprintf(w, "colo=%s country=%s asn=%v tls=%s",
+			props.Colo, props.Country, props.ASN, props.TLSVersion)
+	}))
+}
+```
+
+`IncomingRequestCFProperties` flattens all of the `request.cf` fields — `Colo`, `Country`, `City`, `Region`, `Timezone`, `Latitude`, `Longitude`, `ASN`, `AsOrganization`, `HTTPProtocol`, `TLSVersion`, `TLSCipher`, `ClientTcpRtt`, and more. A few fields with no stable Go shape (`BotManagement`, `HostMetadata`, `TLSClientAuth`) are exposed as raw `js.Value`.
+
+:::note
+`FromRequest` only works for requests produced by `workers.Serve` / `workers.ServeNonBlock` — it reads the original JS `Request` stashed on the request context. If you already hold a raw `js.Value` shaped like `request.cf`, use `cf.FromJS(v)` instead.
+:::

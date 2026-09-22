@@ -1,0 +1,86 @@
+---
+title: WebSocket
+description: Accept server-side WebSocket connections in a Go worker.
+sidebar:
+  badge: Experimental
+---
+
+The `exp/cloudflare/websocket` package implements the server side of the Workers [WebSocket API](https://developers.cloudflare.com/workers/runtime-apis/websockets/): it creates a `WebSocketPair`, accepts the server end, and attaches the client end to the HTTP response.
+
+:::warning[Experimental]
+The `exp/cloudflare/websocket` package lives under `exp/cloudflare` and is experimental. Its API is likely to change. (Unlike most packages there it is entirely hand-written, not generated — it is under `exp/` only because it wraps a runtime API with no other Go binding yet.)
+:::
+
+## Upgrade a request
+
+`websocket.Upgrade(w, r)` checks the `Upgrade: websocket` header and returns a `*websocket.Conn`. The 101 response is only sent once the handler returns, so the read/write loop must run in a goroutine and the handler must return immediately without touching the connection.
+
+```go
+func handleWebSocket(w http.ResponseWriter, req *http.Request) {
+	conn, err := websocket.Upgrade(w, req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	go echo(conn) // return immediately — the goroutine keeps the worker alive
+}
+
+func echo(conn *websocket.Conn) {
+	defer conn.Close(0, "")
+	for {
+		mt, data, err := conn.ReadMessage(context.Background())
+		if err != nil {
+			return // websocket.ErrClosed once the peer closes
+		}
+		if err := conn.WriteMessage(mt, data); err != nil {
+			return
+		}
+	}
+}
+```
+
+- `conn.ReadMessage(ctx)` blocks until a message arrives and returns `(MessageType, []byte, error)` — `websocket.TextMessage` for a JS string, `websocket.BinaryMessage` for an ArrayBuffer. It returns `websocket.ErrClosed` after the connection closes.
+- `conn.WriteMessage(mt, data)` sends one message.
+- `conn.Close(code, reason)` closes the connection; `Close(0, "")` calls `close()` with no arguments. It is safe to call more than once.
+
+## Hibernatable WebSockets in a Durable Object
+
+A [Durable Object](/cloudflare/durable-objects) can accept [hibernatable WebSockets](https://developers.cloudflare.com/durable-objects/best-practices/websockets/), where messages arrive as separate triggers instead of an in-process read loop — so the object (and its Go state) can be evicted between messages. Use `websocket.UpgradeHibernating`, which does not call `accept()`, and hand the connection to `state.AcceptHibernatingConn`:
+
+```go
+func (rm *Room) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	conn, err := websocket.UpgradeHibernating(w, r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// register under a tag so GetWebSockets can find it later; return at once
+	if err := rm.state.AcceptHibernatingConn(conn, "room"); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+```
+
+Messages are then delivered to the object's `durableobjects.WebSocketMessageHandler` (and optionally `WebSocketCloseHandler`/`WebSocketErrorHandler`) — possibly on a different wasm instance after hibernation:
+
+```go
+func (rm *Room) WebSocketMessage(ctx context.Context, conn *websocket.HibernatingConn,
+	mt websocket.MessageType, data []byte) error {
+	peers, err := rm.state.GetWebSockets("room")
+	if err != nil {
+		return err
+	}
+	for _, p := range peers {
+		websocket.HibernatingConnFromJS(p).WriteMessage(mt, data)
+	}
+	return nil
+}
+```
+
+`*websocket.HibernatingConn` supports `WriteMessage` and `Close` but has no `ReadMessage`. When forwarding an upgrade request from a plain worker to a Durable Object, use `stub.FetchWebSocket(w, r)` instead of `stub.Fetch` — a 101 response's WebSocket pairing can't ride along in a reconstructed `*http.Response`.
+
+## Example projects
+
+- [_examples/websocket-echo](https://github.com/syumai/workers-go/tree/main/_examples/websocket-echo) — a plain echo server using `Upgrade`.
+- [_examples/durable-object-websocket](https://github.com/syumai/workers-go/tree/main/_examples/durable-object-websocket) — a broadcast chat room using hibernatable WebSockets.

@@ -1,28 +1,104 @@
 ---
 title: Durable Objects
-description: Call Durable Object stubs from a Go worker.
+description: Host a Go type as a Durable Object class, and call Durable Object stubs from a Go worker.
 sidebar:
   badge: Experimental
 ---
 
 :::warning[Experimental]
-Only **calling stubs** is implemented — a Go worker can fetch a Durable Object stub and send it HTTP requests, but you cannot implement the Durable Object class itself in Go yet. Write the class in JavaScript and call it from Go.
+Hosting is supported via `exp/cloudflare/durableobjects`, which lives under `exp/` and is experimental — its API may change. Calling stubs (`cloudflare.NewDurableObjectNamespace`, below) works independently of it.
 :::
 
-## Declare the binding
+## Implement a Durable Object in Go
+
+A Durable Object class is a Go type that implements `durableobjects.Object` — which is just `http.Handler`. Its `ServeHTTP` handles the object's `fetch()` trigger.
+
+```go
+import "github.com/syumai/workers-go/exp/cloudflare/durableobjects"
+
+type Counter struct {
+	state *durableobjects.DurableObjectState
+}
+
+func (c *Counter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	storage := c.state.Storage()
+	// ...
+}
+```
+
+Register a constructor in `main`, before `workers.Serve` (or any other blocking call). A Worker can host Durable Objects and serve regular HTTP traffic from the same binary.
+
+```go
+func main() {
+	durableobjects.Register("Counter", func(state *durableobjects.DurableObjectState, env js.Value) (durableobjects.Object, error) {
+		return &Counter{state: state}, nil
+	})
+
+	workers.Serve(nil)
+}
+```
+
+Unlike fetch handlers — which boot a new Wasm instance per request — a Durable Object keeps **one Wasm instance alive for the object's whole lifetime**, so the constructor runs once per instance and in-memory Go state survives across triggers. `durableobjects.State()` also returns the current instance's `*DurableObjectState` from anywhere in a handler's call graph.
+
+### Optional trigger handlers
+
+Implement these interfaces on the same type to receive the corresponding triggers — each is dispatched only if implemented; a trigger for one you didn't implement rejects with an error:
+
+- `durableobjects.AlarmHandler` — `Alarm(ctx, info)` for the `alarm()` trigger; schedule with `storage.SetAlarm`.
+- `durableobjects.WebSocketMessageHandler` / `WebSocketCloseHandler` / `WebSocketErrorHandler` — hibernatable WebSocket triggers; accept connections in `ServeHTTP` with `state.AcceptHibernatingConn`.
+
+### Storage
+
+`state.Storage()` returns `*DurableObjectStorage`, which wraps the Durable Object storage API. Typed helpers include `GetString`/`PutString`, `GetJSON`/`PutJSON`, `SetAlarm`, and `SQL()`:
+
+```go
+var count int
+if _, err := storage.GetJSON("count", &count); err != nil {
+	return err
+}
+count++
+if err := storage.PutJSON("count", count); err != nil {
+	return err
+}
+```
+
+## Build and wiring
+
+Pass `-durable-objects` to `workers-assets-gen` (comma-separate multiple classes):
+
+```sh
+go run github.com/syumai/workers-go/cmd/workers-assets-gen -mode=go -durable-objects=Counter
+```
+
+This appends one subclass per name to the generated `worker.mjs`:
+
+```js
+export class Counter extends GoDurableObject { static goClassName = "Counter"; }
+```
+
+Then declare the binding and a migration in `wrangler.toml`:
 
 ```toml
-[durable_objects]
-bindings = [{ name = "COUNTER", class_name = "Counter" }]
+[[durable_objects.bindings]]
+name = "COUNTER"
+class_name = "Counter"
 
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Counter"]
 ```
 
+The class name passed to `-durable-objects`, `wrangler.toml`'s `class_name`, and `durableobjects.Register` must all match exactly.
+
+For a ready-made project layout, start from the template:
+
+```sh
+npm create cloudflare@latest -- --template github.com/syumai/workers-go/_templates/cloudflare/durable-object-go
+```
+
 ## Call a stub
 
-Resolve the namespace, derive an ID with `IdFromName`, get the stub, and call `Fetch` with an ordinary `*http.Request`.
+A Worker that only calls a Durable Object still needs a `durable_objects` binding for the class. Resolve the namespace, derive an ID with `IdFromName`, get the stub, and call `Fetch` with an ordinary `*http.Request`.
 
 ```go
 ns, err := cloudflare.NewDurableObjectNamespace("COUNTER")
@@ -46,6 +122,7 @@ count, err := io.ReadAll(res.Body)
 
 The request is forwarded as-is, so the Durable Object sees the same method, path, headers, and body.
 
-## Example project
+## Example projects
 
-[_examples/durable-object-counter](https://github.com/syumai/workers-go/tree/main/_examples/durable-object-counter) forwards requests to a JavaScript counter object.
+- [_examples/durable-object-go](https://github.com/syumai/workers-go/tree/main/_examples/durable-object-go) hosts a Go `Counter` Durable Object class (with an alarm) and forwards requests to it from a regular HTTP handler.
+- [_examples/durable-object-counter](https://github.com/syumai/workers-go/tree/main/_examples/durable-object-counter) forwards requests to a JavaScript counter object.

@@ -1,0 +1,83 @@
+---
+title: Workflows
+description: Create and manage Cloudflare Workflows instances from Go.
+sidebar:
+  badge: Experimental
+---
+
+[Cloudflare Workflows](https://developers.cloudflare.com/workflows/) run durable, multi-step tasks. The `exp/cloudflare/workflows` package wraps the `Workflow` binding — creating, getting, and controlling instances from a Go worker. The Workflow class itself (a `WorkflowEntrypoint`) is not covered by the binding and is defined in JavaScript.
+
+:::warning[Experimental]
+The `exp/cloudflare/workflows` package lives under `exp/cloudflare` and is experimental. Its API is likely to change.
+:::
+
+## Declare the binding
+
+```toml
+[[workflows]]
+name = "my-workflow"
+binding = "MY_WORKFLOW"
+class_name = "MyWorkflow"
+```
+
+## Create and get instances
+
+`workflows.NewWorkflow` resolves the binding by name. `Create` starts a new instance (an existing `id` is an error); `Get` returns a handle to a running one.
+
+```go
+wf, err := workflows.NewWorkflow("MY_WORKFLOW")
+if err != nil {
+	return err
+}
+
+inst, err := wf.Create(workflows.WorkflowInstanceCreateOptions{
+	ID:     "order-123",
+	Params: js.ValueOf(map[string]any{"orderId": 123}),
+})
+if err != nil {
+	return err
+}
+fmt.Println(inst.ID())
+
+same, err := wf.Get("order-123")
+```
+
+`WorkflowInstanceCreateOptions` also accepts a `*WorkflowInstanceCreateOptionsRetention` and a `LocationHint` (one of the `WorkflowInstanceLocationHint*` constants). `Params` is passed through as a `js.Value`.
+
+## Control an instance
+
+```go
+status, err := inst.Status() // InstanceStatus{Status, Error, Output}
+
+err = inst.SendEvent(workflows.WorkflowInstanceSendEventEvent{
+	Type:    "approval",
+	Payload: js.ValueOf(map[string]any{"approved": true}),
+})
+
+err = inst.Pause()
+err = inst.Resume()
+err = inst.Restart(workflows.WorkflowInstanceRestartOptions{
+	From: &workflows.WorkflowInstanceRestartOptionsFrom{Name: "step-name"},
+})
+err = inst.Terminate(workflows.WorkflowInstanceTerminateOptions{Rollback: true})
+err = inst.Delete()
+```
+
+## Batch operations
+
+`CreateBatch` starts up to 100 instances at once; `DeleteBatch` deletes up to 100 and reports per-instance results.
+
+```go
+instances, err := wf.CreateBatch([]workflows.WorkflowInstanceCreateOptions{
+	{ID: "a"},
+	{ID: "b"},
+})
+
+res, err := wf.DeleteBatch([]string{"a", "b"})
+for _, d := range res.Deleted {
+	fmt.Println("deleted", d.ID)
+}
+for _, e := range res.Errors {
+	fmt.Println("failed", e.ID, e.Message)
+}
+```
