@@ -1,12 +1,12 @@
 ---
 title: Introduction
-description: workers-go is a Go module that runs an HTTP server written in Go on Cloudflare Workers and in the browser.
+description: workers-go is a Go module that runs an HTTP server written in Go on Cloudflare Workers, Neon Functions, and in the browser.
 sidebar:
   label: Introduction
   order: 0
 ---
 
-`workers-go` is a Go module for running an `http.Handler` written in Go on [Cloudflare Workers](https://workers.cloudflare.com/) and, with the browser template, directly in the browser. Your Go code is compiled to WebAssembly, and this package bridges the JavaScript runtime APIs to idiomatic Go types.
+`workers-go` is a Go module for running an `http.Handler` written in Go on [Cloudflare Workers](https://workers.cloudflare.com/), on [Neon Functions](https://neon.com/docs/compute/functions), and, with the browser template, directly in the browser. Your Go code is compiled to WebAssembly, and this package bridges the JavaScript runtime APIs to idiomatic Go types.
 
 :::warning
 This project is experimental. APIs may change between releases.
@@ -22,6 +22,9 @@ This project is experimental. APIs may change between releases.
   <Card title="Browser" href="/browser" icon="globe">
     Serve HTTP from a Go Wasm binary running in the browser.
   </Card>
+  <Card title="Neon Functions" href="/neon" icon="database">
+    Serve http.Handler on Neon's serverless functions platform.
+  </Card>
 </CardGroup>
 
 ## Platforms
@@ -30,6 +33,7 @@ This documentation is organized per platform. Each platform section explains how
 
 - **Cloudflare** — run on Cloudflare Workers or Pages Functions, with bindings for KV, R2, D1, Durable Objects, Queues, Cron Triggers, the Cache API, Service Bindings, and TCP Sockets.
 - **Browser** — run the same `http.Handler` inside a browser tab using the `browser-go` template.
+- **Neon Functions** — run the same `http.Handler` on Neon's serverless functions platform using the `functions-tinygo` template.
 
 ## Feature support
 
