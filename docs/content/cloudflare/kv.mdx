@@ -26,14 +26,37 @@ if err != nil {
 
 ## Get a value
 
-`GetString` reads a value as a string and `GetReader` streams it as an `io.Reader`. Both accept `*kv.GetOptions`; pass `nil` for defaults.
+`GetString` reads a value as a string and `GetReader` streams it as an `io.ReadCloser` — the caller is responsible for closing it. Both accept `*kv.GetOptions`; pass `nil` for defaults. If the key doesn't exist, both return `kv.ErrNotFound`; check for it with `errors.Is`.
 
 ```go
 value, err := counterKV.GetString("count", nil)
+if errors.Is(err, kv.ErrNotFound) {
+	// no value for "count"
+} else if err != nil {
+	return err
+}
 
 r, err := counterKV.GetReader("image", &kv.GetOptions{
 	CacheTTL: 3600, // cache the value at the edge for this many seconds
 })
+if err != nil {
+	return err
+}
+defer r.Close()
+```
+
+### Get multiple values
+
+`GetStrings` reads up to 100 keys in a single call. A missing key is simply omitted from the result map instead of causing an error.
+
+```go
+values, err := counterKV.GetStrings([]string{"count", "other"}, nil)
+if err != nil {
+	return err
+}
+for key, value := range values {
+	fmt.Println(key, value)
+}
 ```
 
 ## Put a value

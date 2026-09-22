@@ -67,6 +67,8 @@ counterKV, err := kv.NewNamespace("COUNTER") // binding name in wrangler.toml
 
 Bindings are read from the runtime context of the current request, so resolve them inside a handler rather than at package init time.
 
+Beyond the hand-written packages under `cloudflare/`, mechanically generated bindings for more of the Workers platform API live under `exp/cloudflare` — see [Generated bindings](/cloudflare/generated-bindings) for how they're produced and how to use one directly.
+
 ## Examples
 
 The [_examples](https://github.com/syumai/workers-go/tree/main/_examples) directory in the repository contains a runnable project for almost every feature described here. Each feature page links to its example.
