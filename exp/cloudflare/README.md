@@ -120,6 +120,12 @@ exp/cloudflare/<pkg>/<pkg>.go                                (hand-written, only
   object literal in the `.d.ts` (`{ type, payload }`), so `workflows.yaml`
   renames it with a `rename: "WorkflowInstance.sendEvent.<raw name>": event`
   entry before cfgen synthesizes the `WorkflowInstanceSendEventEvent` struct.
+  This is the client-side handle for *calling into* a Workflow; `host.go`
+  adds the separate, hand-written concern of *hosting* a Go type as the
+  Workflow's own `run()` implementation — see "Hosting a Workflow" below.
+  `WorkflowStep` (`step.do`/`sleep`/`sleepUntil`/`waitForEvent`) is entirely
+  hand-written too, since `do`'s config-discriminated overloads don't fit
+  cfgen's single-callback rule.
 * `email` generates the builder overloads too: `SendEmail.SendBuilder` and
   `ForwardableEmailMessage.ReplyBuilder` take the flattened
   `EmailMessageBuilder`/`EmailReplyMessageBuilder` structs; their address and
@@ -364,6 +370,86 @@ db := state.Storage().SQL().OpenDB()
 defer db.Close()
 _, err := db.Exec(`INSERT INTO todos (title) VALUES (?)`, title)
 ```
+
+## Hosting a Workflow
+
+`exp/cloudflare/workflows/host.go` lets a Worker host a Go type's `run()` as
+a [Workflow](https://developers.cloudflare.com/workflows/)'s
+`WorkflowEntrypoint`. See `_examples/workflow-go` for a complete, runnable
+example.
+
+Unlike a Durable Object, a Cloudflare Workflow's `WorkflowEntrypoint`
+doesn't need to keep any state alive between triggers by itself — Workflows
+persists step results and durably replays `run()` on its own — so hosting a
+Workflow follows the regular "one wasm instance per trigger" shape every
+other trigger in this module uses, not the Durable Object
+one-instance-per-object model:
+
+* `worker.mjs`'s `GoWorkflowEntrypoint` base class (which a generated
+  subclass extends — a subclass is required here, since `WorkflowEntrypoint`
+  is abstract) calls `run()` on a fresh wasm instance for the Workflow's
+  `run(event, step)` trigger, passing a `workflow: { className }` runtime
+  context entry.
+* On the Go side, `workflows.Register(className, runner)` records a
+  `Runner` for a class name (call it before `workers.Serve`, at the top of
+  `main`). Every `run()` trigger looks up `workflow.className` in that
+  registry and calls the matching `Runner`.
+* `*workflows.Step` (`Do`/`DoWithConfig`/`DoJSON`/`DoJSONWithConfig`/
+  `Sleep`/`SleepUntil`/`WaitForEvent`) wraps the JS `WorkflowStep` passed
+  into `run()`: `Do`'s callback only runs if that step hasn't already
+  completed for this Workflow instance — on a retry/replay, Workflows
+  returns the saved result instead of calling it again. `DoJSON`/
+  `DoJSONWithConfig` are generic helpers that JSON-encode/decode a step's
+  result instead of working with a raw `js.Value`, the same way
+  `durableobjects.DurableObjectStorage.GetJSON`/`PutJSON` do.
+* Wrap a step (or `Runner`) error with `workflows.NonRetryable(err)` to fail
+  the Workflow instance permanently instead of letting Workflows retry it —
+  this rejects with the runtime's `cloudflare:workflows` `NonRetryableError`
+  class instead of a plain `Error` (fetched from the runtime context the
+  same way `email`'s `EmailMessage` is; unavailable under
+  `runtime/browser.mjs`, where it falls back to a plain `Error`).
+
+### Wiring it up
+
+1. In `main`, before `workers.Serve` (or any other blocking call):
+   ```go
+   workflows.Register("MyWorkflow", func(ctx context.Context, event *workflows.Event, step *workflows.Step) (js.Value, error) {
+       result, err := workflows.DoJSON(step, "step-1", func(ctx context.Context) (MyResult, error) {
+           return MyResult{...}, nil
+       })
+       if err != nil {
+           return js.Value{}, err
+       }
+       if err := step.Sleep("wait", time.Second); err != nil {
+           return js.Value{}, err
+       }
+       return workflows.ResultJSON(result)
+   })
+   ```
+2. Build with `-workflows=MyWorkflow` (comma-separate multiple classes):
+   ```sh
+   go run github.com/syumai/workers-go/cmd/workers-assets-gen -mode=go -workflows=MyWorkflow
+   ```
+   This appends one subclass definition per name to the generated
+   `worker.mjs`:
+   ```js
+   export class MyWorkflow extends GoWorkflowEntrypoint { static goClassName = "MyWorkflow"; }
+   ```
+   The name passed here, the `class_name` in `wrangler.toml`'s
+   `[[workflows]]`, and the `className` given to `workflows.Register` must
+   all match exactly.
+3. Add the binding to `wrangler.toml`:
+   ```toml
+   [[workflows]]
+   name = "my-workflow"
+   binding = "MY_WORKFLOW"
+   class_name = "MyWorkflow"
+   ```
+   A Worker can create/inspect instances of the Workflow it hosts (or any
+   other Workflow binding) through the client-side `workflows.Workflow`/
+   `WorkflowInstance` L1 (`NewWorkflow("MY_WORKFLOW")` — see
+   `zworkflows_gen.go`) — hosting a Workflow and calling into one are
+   independent; a Worker can do either, both, or neither.
 
 ## Regenerating the bindings
 

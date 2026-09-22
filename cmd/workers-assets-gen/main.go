@@ -27,11 +27,13 @@ func main() {
 		runtime        string
 		buildDirPath   string
 		durableObjects string
+		workflows      string
 	)
 	flag.StringVar(&mode, "mode", string(ModeTinygo), `build mode: tinygo or go`)
 	flag.StringVar(&runtime, "runtime", string(RuntimeCloudflare), `runtime: cloudflare, browser, or neon`)
 	flag.StringVar(&buildDirPath, "o", defaultBuildDirPath, `output dir path: defaults to "build"`)
 	flag.StringVar(&durableObjects, "durable-objects", "", `comma-separated list of Durable Object class names to define in worker.mjs (e.g. "Counter,Room")`)
+	flag.StringVar(&workflows, "workflows", "", `comma-separated list of Workflow class names to define in worker.mjs (e.g. "MyWorkflow,Other")`)
 	flag.Parse()
 	if !Mode(mode).IsValid() {
 		flag.PrintDefaults()
@@ -43,16 +45,17 @@ func main() {
 		os.Exit(1)
 		return
 	}
-	if err := runMain(Mode(mode), Runtime(runtime), buildDirPath, parseDurableObjects(durableObjects)); err != nil {
+	if err := runMain(Mode(mode), Runtime(runtime), buildDirPath, parseClassNames(durableObjects), parseClassNames(workflows)); err != nil {
 		fmt.Fprintf(os.Stderr, "err: %v", err)
 		os.Exit(1)
 	}
 }
 
-// parseDurableObjects splits a comma-separated -durable-objects flag value
-// into class names, dropping empty entries (so "" produces nil, and stray
-// whitespace/commas like "Counter, ,Room" don't produce blank class names).
-func parseDurableObjects(s string) []string {
+// parseClassNames splits a comma-separated flag value (-durable-objects or
+// -workflows) into class names, dropping empty entries (so "" produces nil,
+// and stray whitespace/commas like "Counter, ,Room" don't produce blank
+// class names).
+func parseClassNames(s string) []string {
 	var names []string
 	for _, name := range strings.Split(s, ",") {
 		name = strings.TrimSpace(name)
@@ -64,7 +67,7 @@ func parseDurableObjects(s string) []string {
 	return names
 }
 
-func runMain(mode Mode, runtime Runtime, buildDirPath string, durableObjects []string) error {
+func runMain(mode Mode, runtime Runtime, buildDirPath string, durableObjects, workflows []string) error {
 	if err := os.RemoveAll(buildDirPath); err != nil {
 		return err
 	}
@@ -81,6 +84,9 @@ func runMain(mode Mode, runtime Runtime, buildDirPath string, durableObjects []s
 		return err
 	}
 	if err := appendDurableObjectClasses(buildDirPath, durableObjects); err != nil {
+		return err
+	}
+	if err := appendWorkflowClasses(buildDirPath, workflows); err != nil {
 		return err
 	}
 	return nil
@@ -109,6 +115,32 @@ func appendDurableObjectClasses(buildDirPath string, durableObjects []string) er
 	var b strings.Builder
 	for _, name := range durableObjects {
 		fmt.Fprintf(&b, "\nexport class %s extends GoDurableObject { static goClassName = %q; }\n", name, name)
+	}
+	_, err = f.WriteString(b.String())
+	return err
+}
+
+// appendWorkflowClasses appends one GoWorkflowEntrypoint subclass
+// definition per name in workflows to the generated worker.mjs, e.g. for
+// "MyWorkflow":
+//
+//	export class MyWorkflow extends GoWorkflowEntrypoint { static goClassName = "MyWorkflow"; }
+//
+// wrangler.toml's [[workflows]] class_name must match one of these names
+// exactly. If workflows is empty, worker.mjs is left untouched.
+func appendWorkflowClasses(buildDirPath string, workflows []string) error {
+	if len(workflows) == 0 {
+		return nil
+	}
+	workerPath := path.Join(buildDirPath, "worker.mjs")
+	f, err := os.OpenFile(workerPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	var b strings.Builder
+	for _, name := range workflows {
+		fmt.Fprintf(&b, "\nexport class %s extends GoWorkflowEntrypoint { static goClassName = %q; }\n", name, name)
 	}
 	_, err = f.WriteString(b.String())
 	return err

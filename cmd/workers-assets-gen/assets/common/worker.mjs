@@ -1,5 +1,12 @@
 import "./wasm_exec.js";
-import { createRuntimeContext, loadModule } from "./runtime.mjs";
+import {
+  createRuntimeContext,
+  loadModule,
+  WorkflowEntrypointBase,
+} from "./runtime.mjs";
+// WorkerEntrypointBase is also exported by every runtime/*.mjs (for a future
+// GoWorkerEntrypoint — see tmp/06-codegen-spec.md 8) but worker.mjs doesn't
+// use it yet.
 
 let mod;
 
@@ -146,5 +153,53 @@ export class GoDurableObject {
 
   async webSocketError(ws, error) {
     return (await this.#bind()).handleDurableObjectWebSocketError(ws, error);
+  }
+}
+
+// GoWorkflowEntrypoint is the base class a Go-hosted Workflow's
+// WorkflowEntrypoint subclasses (a subclass is mandatory: unlike a Durable
+// Object, Workflows requires extending cloudflare:workers'
+// WorkflowEntrypoint). Each run() trigger runs in its own wasm instance —
+// there's no Durable-Object-style cross-trigger state to keep alive — but
+// #bind() still memoizes run() (in #ready) per class instance, matching
+// GoDurableObject's shape above; Workflows may reuse the same
+// WorkflowEntrypoint instance across retries/replays of one run().
+//
+// A subclass is generated per Workflow class name by
+// cmd/workers-assets-gen's -workflows flag, e.g.:
+//   export class MyWorkflow extends GoWorkflowEntrypoint { static goClassName = "MyWorkflow"; }
+export class GoWorkflowEntrypoint extends WorkflowEntrypointBase {
+  // goClassName identifies this class to the Go side (workflows.Register's
+  // className argument), via the "workflow" runtime context entry. A
+  // generated subclass sets it explicitly; it falls back to the JS class
+  // name (this.constructor.name) if unset.
+  static goClassName = undefined;
+
+  // Declared (not assigned) so the implicit derived constructor — this
+  // class defines none of its own — can initialize them after the required
+  // super(ctx, env) call, which the base WorkflowEntrypoint class uses to
+  // set the protected `this.ctx`/`this.env` #bind() reads below.
+  #binding;
+  #ready;
+
+  async #bind() {
+    if (!this.#ready) {
+      const binding = {};
+      this.#binding = binding;
+      this.#ready = run(
+        createRuntimeContext({
+          env: this.env,
+          ctx: this.ctx,
+          binding,
+          workflow: { className: this.constructor.goClassName ?? this.constructor.name },
+        }),
+      );
+    }
+    await this.#ready;
+    return this.#binding;
+  }
+
+  async run(event, step) {
+    return (await this.#bind()).handleWorkflowRun(event, step);
   }
 }

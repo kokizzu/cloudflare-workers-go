@@ -28,3 +28,15 @@
     passed to `durableobjects.Register` on the Go side (see
     `exp/cloudflare/durableobjects`). Omitting the flag leaves `worker.mjs`
     without any Durable Object class, as before.
+* `-workflows`
+  - comma-separated list of [Workflow](https://developers.cloudflare.com/workflows/)
+    class names (e.g. `-workflows=MyWorkflow,Other`) to define in the
+    generated `worker.mjs`. For each name, a subclass of
+    `GoWorkflowEntrypoint` is appended:
+    ```js
+    export class MyWorkflow extends GoWorkflowEntrypoint { static goClassName = "MyWorkflow"; }
+    ```
+    Each name must match the `class_name` used in `wrangler.toml`'s
+    `[[workflows]]`, and the `className` passed to `workflows.Register` on
+    the Go side (see `exp/cloudflare/workflows`). Omitting the flag leaves
+    `worker.mjs` without any Workflow class, as before.

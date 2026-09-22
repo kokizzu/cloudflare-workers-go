@@ -1,0 +1,11 @@
+name = "workflow-go"
+main = "./build/worker.mjs"
+compatibility_date = "2024-04-01"
+
+[[workflows]]
+name = "my-workflow"
+binding = "MY_WORKFLOW"
+class_name = "MyWorkflow"
+
+[build]
+command = "make build"
