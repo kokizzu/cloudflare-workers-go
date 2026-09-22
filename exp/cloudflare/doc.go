@@ -18,7 +18,7 @@ package cloudflare
 
 // WorkersTypesVersion is the exact @cloudflare/workers-types version the
 // generated bindings in this tree were derived from. It is bumped whenever
-// exp/internal/gen/ir/index.json is regenerated from a newer release.
+// scripts/gen-bindings/ir/index.json is regenerated from a newer release.
 const WorkersTypesVersion = "5.20260906.1"
 
 //go:generate make -C ../.. gen-bindings

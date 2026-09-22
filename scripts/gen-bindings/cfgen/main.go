@@ -1,5 +1,5 @@
 // Command cfgen generates Go bindings under exp/cloudflare/<pkg> from the
-// JSON IR at exp/internal/gen/ir/index.json and the overrides YAML files
+// JSON IR at scripts/gen-bindings/ir/index.json and the overrides YAML files
 // under exp/internal/gen/overrides/. See tmp/06-codegen-spec.md section 1.3.
 package main
 
@@ -37,7 +37,7 @@ func run() error {
 		return err
 	}
 
-	irPath := filepath.Join(absRoot, "exp", "internal", "gen", "ir", "index.json")
+	irPath := filepath.Join(absRoot, "scripts", "gen-bindings", "ir", "index.json")
 	doc, err := loadIR(irPath)
 	if err != nil {
 		return fmt.Errorf("loading IR: %w", err)

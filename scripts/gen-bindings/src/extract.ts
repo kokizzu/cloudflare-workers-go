@@ -16,7 +16,7 @@ interface Args {
 }
 
 function parseArgs(argv: string[]): Args {
-	const args: Args = { out: path.join("..", "..", "exp", "internal", "gen", "ir") };
+	const args: Args = { out: "ir" };
 	for (let i = 0; i < argv.length; i++) {
 		const a = argv[i];
 		const next = argv[i + 1];

@@ -38,7 +38,7 @@ jobs:
           go vet ./...
 
       # Verifies exp/cloudflare/<pkg>/z<pkg>_gen.go is what cfgen would
-      # produce from the committed IR (exp/internal/gen/ir/index.json) and
+      # produce from the committed IR (scripts/gen-bindings/ir/index.json) and
       # overrides (exp/internal/gen/overrides/*.yaml) right now. This does
       # NOT re-run the `extract` step (see gen-bindings-extract in the
       # Makefile), so it needs no Node/pnpm toolchain — only a stale commit
@@ -195,4 +195,3 @@ jobs:
         run: |
           echo "::error::This PR removes or changes exported symbols that the syumai/workers mirror forwards. Add the 'breaking' label to acknowledge that the mirror will drop/change these symbols on the next sync, or restore compatibility instead."
           exit 1
-

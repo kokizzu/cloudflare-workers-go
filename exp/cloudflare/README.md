@@ -11,7 +11,7 @@ one property becomes one Go getter (or struct field, for data types).
 Everything under `exp/`, including this tree, is **experimental**:
 
 * Its shape follows `@cloudflare/workers-types` directly, so it can gain,
-  lose, or change fields and methods whenever `exp/internal/gen/ir/index.json`
+  lose, or change fields and methods whenever `scripts/gen-bindings/ir/index.json`
   is regenerated from a newer `workers-types` release — including in a minor
   version release of this module.
 * There is no attempt to hide Cloudflare's TypeScript API surface behind a
@@ -38,15 +38,15 @@ generated package) was derived from.
 node_modules/@cloudflare/workers-types/<date>/index.d.ts   (not committed)
         │  scripts/gen-bindings/src/extract.ts (Node + TypeScript Compiler API)
         ▼
-exp/internal/gen/ir/index.json                              (committed IR)
-exp/internal/gen/ir/SOURCE                                  (package@version + extraction date)
+scripts/gen-bindings/ir/index.json                          (committed IR)
+scripts/gen-bindings/ir/SOURCE                              (package@version + extraction date)
         │  scripts/gen-bindings/cfgen (Go) + exp/internal/gen/overrides/<pkg>.yaml
         ▼
 exp/cloudflare/<pkg>/z<pkg>_gen.go                           (generated, DO NOT EDIT)
 exp/cloudflare/<pkg>/<pkg>.go                                (hand-written, only where needed)
 ```
 
-* **`exp/internal/gen/ir/index.json`** is a JSON dump of every top-level
+* **`scripts/gen-bindings/ir/index.json`** is a JSON dump of every top-level
   declaration (interface, class, type alias) in the `workers-types` `.d.ts`
   source, extracted once and committed. It is package/version-tagged by the
   sibling `SOURCE` file. Regenerating it requires Node.js 24+ and pnpm, but
@@ -504,9 +504,9 @@ A method whose only parameter is a callback shaped `(a: A) => Promise<U>` or
 ### Adding a new generated package
 
 1. Find the declaration name(s) you need in the committed IR:
-   `jq '.decls[] | select(.name | test("MyThing")) | .name' exp/internal/gen/ir/index.json`.
+   `jq '.decls[] | select(.name | test("MyThing")) | .name' scripts/gen-bindings/ir/index.json`.
    Inspect the full declaration with
-   `jq '.decls[] | select(.name=="MyThing")' exp/internal/gen/ir/index.json`
+   `jq '.decls[] | select(.name=="MyThing")' scripts/gen-bindings/ir/index.json`
    to see its members' types before writing overrides — this is much faster
    than iterating against generation errors.
 2. Add `exp/internal/gen/overrides/mypkg.yaml` (package name = directory
