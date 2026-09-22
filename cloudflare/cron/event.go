@@ -23,6 +23,6 @@ func NewEvent(ctx context.Context) (*Event, error) {
 	scheduledTimeVal := obj.Get("scheduledTime").Float()
 	return &Event{
 		Cron:          obj.Get("cron").String(),
-		ScheduledTime: time.Unix(int64(scheduledTimeVal)/1000, 0).UTC(),
+		ScheduledTime: time.UnixMilli(int64(scheduledTimeVal)).UTC(),
 	}, nil
 }
