@@ -30,7 +30,9 @@ export default defineMeta({
     "versions",
     "websocket",
     "workflows",
+    "rpc",
     "hono",
+    "generated-bindings",
     "build",
   ],
 });

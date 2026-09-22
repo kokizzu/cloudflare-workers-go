@@ -25,7 +25,7 @@ if err != nil {
 
 ## Get an object
 
-`Get` returns an `*r2.Object` whose `Body` streams the contents. It returns `nil` (with no error) when the key does not exist. `Head` returns the metadata only — its `Body` is always `nil`.
+`Get` returns an `*r2.Object` whose `Body` (an `io.ReadCloser`) streams the contents. It returns `nil` (with no error) when the key does not exist. `Head` returns the metadata only — its `Body` is always `nil`.
 
 ```go
 obj, err := bucket.Get("images/logo.png")
@@ -35,7 +35,7 @@ if err != nil {
 if obj == nil {
 	// not found
 }
-defer obj.Body.(io.Closer).Close()
+defer obj.Body.Close()
 io.Copy(w, obj.Body)
 ```
 
@@ -75,6 +75,34 @@ for _, obj := range objects.Objects {
 :::note
 List currently takes no options — prefix, limit, and cursor are not implemented yet.
 :::
+
+## Multipart upload
+
+For large objects, use a [multipart upload](https://developers.cloudflare.com/r2/api/workers/workers-multipart-usage/) to upload parts individually instead of buffering the whole object in memory. `CreateMultipartUpload` starts one; `UploadPart` sends each part (numbered 1 to 10,000) from an `io.Reader`; `Complete` assembles the uploaded parts, in order, into the final object.
+
+```go
+upload, err := bucket.CreateMultipartUpload("videos/large.mp4", &r2.MultipartOptions{
+	HTTPMetadata: r2.HTTPMetadata{ContentType: "video/mp4"},
+})
+if err != nil {
+	return err
+}
+
+var parts []r2.UploadedPart
+for i, chunk := range chunks {
+	part, err := upload.UploadPart(i+1, bytes.NewReader(chunk))
+	if err != nil {
+		// abort on failure to avoid leaving an incomplete upload behind
+		upload.Abort()
+		return err
+	}
+	parts = append(parts, *part)
+}
+
+obj, err := upload.Complete(parts)
+```
+
+`ResumeMultipartUpload(key, uploadID)` returns a handle to an existing multipart upload without validating that it exists on the server — a mistaken key/uploadID surfaces as an error from the first `UploadPart`, `Complete`, or `Abort` call instead. `Abort` cancels an in-progress upload. `MultipartOptions` accepts the same `HTTPMetadata`, `CustomMetadata`, and additionally `StorageClass` fields as `PutOptions`.
 
 ## Example projects
 

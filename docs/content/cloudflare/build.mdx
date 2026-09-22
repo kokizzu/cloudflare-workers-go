@@ -35,10 +35,21 @@ command = "npm run build"
 | `-mode` | `go`, `tinygo` | `tinygo` |
 | `-runtime` | `cloudflare` | `cloudflare` |
 | `-o` | output directory | `build` |
+| [`-durable-objects`](/cloudflare/durable-objects) | comma-separated Durable Object class names (e.g. `Counter,Room`) | (none) |
+| [`-workflows`](/cloudflare/workflows) | comma-separated Workflow class names (e.g. `MyWorkflow,Other`) | (none) |
+| [`-entrypoints`](/cloudflare/rpc) | semicolon-separated `Name` or `Name:method1,method2` RPC entrypoint specs (e.g. `MyService:add,greet;Other`) | (none) |
+
+Each of these flags appends one subclass definition to the generated `worker.mjs` per name/spec — see the linked page for the wiring details (matching `wrangler.toml` binding, and the `Register` call on the Go side).
 
 ## Go vs TinyGo
 
 The `worker-go` template uses the standard Go toolchain (Go 1.24+). The `worker-tinygo` template uses TinyGo 0.42.0 or later, which produces a much smaller Wasm binary — worth it for faster cold starts. TinyGo 0.41.x cannot build `net/http` for Wasm.
+
+A [`durable-object-go`](https://github.com/syumai/workers-go/tree/main/_templates/cloudflare/durable-object-go) template is also available, preconfigured with the `-durable-objects` flag and a `wrangler.toml` binding/migration:
+
+```sh
+npm create cloudflare@latest -- --template github.com/syumai/workers-go/_templates/cloudflare/durable-object-go
+```
 
 ## Deploy
 

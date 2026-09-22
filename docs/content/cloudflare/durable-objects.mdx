@@ -62,6 +62,29 @@ if err := storage.PutJSON("count", count); err != nil {
 }
 ```
 
+The generated bindings also expose `GetMultiple(keys, options)`/`PutMultiple(entries, options)` for batch reads/writes, `List(options)` for a range scan, and `Alarm()` (a typed helper reading back the currently scheduled alarm time). `Transaction(func(txn *DurableObjectTransaction) (js.Value, error))` runs a closure against a `DurableObjectTransaction` — with the same `Get`/`Put`/`Delete`/`GetMultiple`/`PutMultiple`/`List` methods as storage itself, plus `Rollback` — committing automatically unless the closure errors or calls `Rollback`. `BlockConcurrencyWhile(func() (js.Value, error))` (on `*DurableObjectState`) runs a closure exclusively, deferring all other events to this object until it completes.
+
+### SQL storage with `database/sql`
+
+`state.Storage().SQL()` returns a `*SQLStorage` wrapping the Durable Object's embedded [SQLite database](https://developers.cloudflare.com/durable-objects/api/sql-storage/). `OpenDB()` returns a `*sql.DB` for it — placeholders are `?`, bind values must be `string`/`int64`/`float64`/`bool`/`[]byte`/`nil`/`time.Time` (encoded as RFC 3339), and transactions (`Begin`/`BeginTx`) are not currently supported.
+
+```go
+db := state.Storage().SQL().OpenDB()
+defer db.Close()
+
+_, err := db.Exec(`INSERT INTO todos (title) VALUES (?)`, title)
+```
+
+For direct access without `database/sql`, `SQLStorage.Exec(query string, bindings ...any) (*SQLStorageCursor, error)` runs a statement and returns a cursor; `cursor.Rows()` decodes its remaining rows into `[]map[string]any`.
+
+```go
+cursor, err := state.Storage().SQL().Exec(`SELECT id, title FROM todos WHERE done = ?`, false)
+if err != nil {
+	return err
+}
+rows, err := cursor.Rows()
+```
+
 ## Build and wiring
 
 Pass `-durable-objects` to `workers-assets-gen` (comma-separate multiple classes):
@@ -121,6 +144,15 @@ count, err := io.ReadAll(res.Body)
 ```
 
 The request is forwarded as-is, so the Durable Object sees the same method, path, headers, and body.
+
+`stub.RPC()` returns an [`*rpc.Stub`](/cloudflare/rpc) for calling one of the Durable Object's own methods beyond `fetch()` — Durable Objects support Workers RPC the same way a named `WorkerEntrypoint` reached over a Service binding does:
+
+```go
+var count int
+err = stub.RPC().CallJSON("increment", &count, 1)
+```
+
+To forward a WebSocket upgrade request to a Durable Object that accepts it (via `websocket.Upgrade`/`UpgradeHibernating` inside `ServeHTTP`), use `stub.FetchWebSocket(w, r)` instead of `stub.Fetch` — see [WebSocket](/cloudflare/websocket) for the full hibernation flow.
 
 ## Example projects
 

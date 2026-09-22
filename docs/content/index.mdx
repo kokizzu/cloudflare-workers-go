@@ -31,7 +31,7 @@ This project is experimental. APIs may change between releases.
 
 This documentation is organized per platform. Each platform section explains how to use every supported feature.
 
-- **Cloudflare** — run on Cloudflare Workers or Pages Functions, with bindings for KV, R2, D1, Durable Objects, Queues, Cron Triggers, the Cache API, Service Bindings, and TCP Sockets.
+- **Cloudflare** — run on Cloudflare Workers or Pages Functions, with bindings for KV, R2, D1, Durable Objects, Queues, Cron Triggers, the Cache API, Service Bindings, TCP Sockets, Workers RPC / named entrypoints, and Workflows.
 - **Browser** — run the same `http.Handler` inside a browser tab using the `browser-go` template.
 - **Neon Functions** — run the same `http.Handler` on Neon's serverless functions platform using the `functions-tinygo` template.
 
@@ -44,7 +44,7 @@ This documentation is organized per platform. Each platform section explains how
 | KV | Stable (method options are not fully implemented) |
 | R2 | Stable (method options are not fully implemented) |
 | Cache API | Stable |
-| Durable Objects | Experimental — hosting a Go type as a Durable Object class and calling stubs |
+| Durable Objects | Experimental — hosting a Go type as a Durable Object class (with SQL storage) and calling stubs |
 | D1 | Experimental (alpha) |
 | Queues (producer and consumer) | Stable |
 | Cron Triggers | Stable |
@@ -54,7 +54,8 @@ This documentation is organized per platform. Each platform section explains how
 | WebSocket (`exp/cloudflare/websocket`) | Experimental |
 | Email Workers (`exp/cloudflare/email`) | Experimental |
 | Tail Workers (`exp/cloudflare/tail`) | Experimental |
-| Workflows (`exp/cloudflare/workflows`) | Experimental |
+| Workflows (`exp/cloudflare/workflows`) | Experimental — calling into a Workflow and hosting one (`WorkflowEntrypoint`) |
+| RPC / named entrypoints (`exp/cloudflare/rpc`) | Experimental — calling a `WorkerEntrypoint`/Durable Object over RPC and hosting one |
 | Workers AI, Vectorize, Images, Analytics Engine, Hyperdrive, Secrets Store, Dispatch, Rate Limiting, Versions, `request.cf` (`exp/cloudflare`) | Experimental |
 | Hono middleware (`exp/hono`) | Experimental |
 
