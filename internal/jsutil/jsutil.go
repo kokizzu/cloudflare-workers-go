@@ -98,49 +98,49 @@ func StrRecordToMap(v js.Value) map[string]string {
 	return result
 }
 
-// MaybeString returns string value of given JavaScript value or returns "" if the value is undefined.
+// MaybeString returns string value of given JavaScript value or returns "" if the value is undefined or null.
 func MaybeString(v js.Value) string {
-	if v.IsUndefined() {
+	if v.IsUndefined() || v.IsNull() {
 		return ""
 	}
 	return v.String()
 }
 
-// MaybeInt returns int value of given JavaScript value or returns nil if the value is undefined.
+// MaybeInt returns int value of given JavaScript value or returns nil if the value is undefined or null.
 func MaybeInt(v js.Value) int {
-	if v.IsUndefined() {
+	if v.IsUndefined() || v.IsNull() {
 		return 0
 	}
 	return v.Int()
 }
 
-// MaybeDate returns time.Time value of given JavaScript Date value or returns nil if the value is undefined.
+// MaybeDate returns time.Time value of given JavaScript Date value or returns nil if the value is undefined or null.
 func MaybeDate(v js.Value) (time.Time, error) {
-	if v.IsUndefined() {
+	if v.IsUndefined() || v.IsNull() {
 		return time.Time{}, nil
 	}
 	return DateToTime(v)
 }
 
-// MaybeBool returns bool value of given JavaScript value or returns false if the value is undefined.
+// MaybeBool returns bool value of given JavaScript value or returns false if the value is undefined or null.
 func MaybeBool(v js.Value) bool {
-	if v.IsUndefined() {
+	if v.IsUndefined() || v.IsNull() {
 		return false
 	}
 	return v.Bool()
 }
 
-// MaybeFloat returns float64 value of given JavaScript value or returns 0 if the value is undefined.
+// MaybeFloat returns float64 value of given JavaScript value or returns 0 if the value is undefined or null.
 func MaybeFloat(v js.Value) float64 {
-	if v.IsUndefined() {
+	if v.IsUndefined() || v.IsNull() {
 		return 0
 	}
 	return v.Float()
 }
 
-// MaybeStringSlice returns []string value of given JavaScript Array value or returns nil if the value is undefined.
+// MaybeStringSlice returns []string value of given JavaScript Array value or returns nil if the value is undefined or null.
 func MaybeStringSlice(v js.Value) []string {
-	if v.IsUndefined() {
+	if v.IsUndefined() || v.IsNull() {
 		return nil
 	}
 	length := v.Length()

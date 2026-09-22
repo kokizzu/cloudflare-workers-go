@@ -83,8 +83,7 @@ Package-specific fakes (`fake_kv_test.go`, `fake_bucket_test.go`,
 
 Search for `t.Skip("known issue` to find them. At the time of writing:
 
-- `internal/jsutil`: `MaybeString` / `MaybeInt` / `MaybeDate` treat `null` as
-  a value, not as zero; `AwaitPromise` panics when a Promise rejects with a
+- `internal/jsutil`: `AwaitPromise` panics when a Promise rejects with a
   non-object; a panic inside the function passed to `TryCatch` hangs the
   process.
 - `cloudflare/cron`: `scheduledTime` loses milliseconds.
