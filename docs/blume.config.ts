@@ -12,4 +12,8 @@ export default defineConfig({
   content: {
     root: "content",
   },
+  deployment: {
+    site: "https://syumai.github.io",
+    base: "/workers-go",
+  },
 });
