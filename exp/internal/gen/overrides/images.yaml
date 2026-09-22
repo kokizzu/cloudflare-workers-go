@@ -1,0 +1,55 @@
+package: images
+doc: |
+  Package images provides the Cloudflare Images runtime binding
+  (https://developers.cloudflare.com/images/transform-images/bindings/).
+
+  ImagesBinding.hosted (HostedImagesBinding, the CRUD API for the Images
+  hosting product) is excluded; this package only covers the runtime
+  image-transformation API (info/input/text + ImageTransformer).
+include:
+  - ImagesBinding
+  - ImageTransformer
+  - ImageTransformationResult
+  - ImageInputOptions
+  - ImageTransform
+  - ImageDrawOptions
+  - ImageCompositeMode
+  - ImageOutputOptions
+  - ImageInfoResponse
+  - ImageTransformationResponseOptions
+  - ImageTransformationOutputOptions
+  - TextOptions
+bindings:
+  - ImagesBinding
+types:
+  # image is (ReadableStream<Uint8Array> | ImageTransformer); only the
+  # ReadableStream branch is representable generically, so it's narrowed to
+  # io.Reader (via jsrt.ReadableStreamFromReader at the call site). Passing
+  # another ImageTransformer as the image (chaining draw() straight off
+  # another transform handle, without round-tripping through bytes) isn't
+  # supported by this generated binding.
+  ImageTransformer.draw.params.image: "io.Reader"
+  # headers is HeadersInit (Headers | Iterable<Iterable<string>> |
+  # Record<string, string>) in the .d.ts source; cfgen's union rules don't
+  # attempt to unify three structurally different shapes like this, so
+  # (5.1 item 4) "types:" is extended to accept "http.Header" as a
+  # built-in spelling — picking the Headers branch, converted via
+  # jsrt.HeadersToJS — the same way an included data declaration name
+  # picks one branch of an otherwise-unresolvable union elsewhere.
+  ImageTransformationResponseOptions.headers: "http.Header"
+  # trim is ("border" | { top?, left?, bottom?, right?, width?, height?,
+  # borderColor? }): a string literal mixed with an object literal, which
+  # none of cfgen's union rules cover (they need every branch to be the
+  # same kind — all string-ish, all data-shaped, or all refs). Left as
+  # js.Value; a caller wanting the object form passes a raw JS object.
+  ImageTransform.trim: "js.Value"
+  # gravity mixes string literals (face/left/right/top/bottom/...) with a
+  # { x, y } object-literal branch for precise coordinates; same
+  # limitation as trim.
+  ImageTransform.gravity: "js.Value"
+  # repeat is (boolean | string) in ImageDrawOptions — two different
+  # primitive kinds, not literals of the same kind, so none of the
+  # literal-mixing rules apply either.
+  ImageDrawOptions.repeat: "js.Value"
+exclude:
+  - ImagesBinding.hosted

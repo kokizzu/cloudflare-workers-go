@@ -32,24 +32,47 @@ func ToResponse(res js.Value) (*http.Response, error) {
 
 // ToJSResponse converts *http.Response to JavaScript sides Response class object.
 func ToJSResponse(res *http.Response) js.Value {
-	return newJSResponse(res.StatusCode, res.Header, res.ContentLength, res.Body, nil)
+	return newJSResponse(res.StatusCode, res.Header, res.ContentLength, res.Body, nil, nil)
 }
 
 // newJSResponse creates JavaScript sides Response class object.
 //   - Response: https://developer.mozilla.org/docs/Web/API/Response
-func newJSResponse(statusCode int, headers http.Header, contentLength int64, body io.ReadCloser, rawBody *js.Value) js.Value {
+//
+// webSocket, when non-nil, is attached as ResponseInit.webSocket and forces
+// status 101 regardless of statusCode (see ResponseWriter.SetWebSocket).
+func newJSResponse(statusCode int, headers http.Header, contentLength int64, body io.ReadCloser, rawBody *js.Value, webSocket *js.Value) js.Value {
 	status := statusCode
 	if status == 0 {
 		status = http.StatusOK
+	}
+	if webSocket != nil {
+		status = http.StatusSwitchingProtocols
 	}
 	respInit := jsutil.NewObject()
 	respInit.Set("status", status)
 	respInit.Set("statusText", http.StatusText(status))
 	respInit.Set("headers", ToJSHeader(headers))
+	if webSocket != nil {
+		respInit.Set("webSocket", *webSocket)
+	}
 	if status == http.StatusSwitchingProtocols ||
 		status == http.StatusNoContent ||
 		status == http.StatusResetContent ||
 		status == http.StatusNotModified {
+		// For a WebSocket upgrade, body is intentionally left open: it wraps
+		// the *bodyCloser ServeRequest hands to ResponseWriter, whose Close
+		// (via onBodyClosed) signals the top-level handler's response body
+		// is fully consumed so the Go program may exit (see serve.go /
+		// handler_js.go). Closing it here would fire that signal
+		// immediately and tear down the goroutines a WebSocket handler just
+		// started (e.g. an echo loop) before they get to run. For the
+		// other bodyless statuses there is no such handler still in
+		// flight, so close body here — otherwise nothing else ever will,
+		// and onBodyClosed (and anything blocked on it, like Serve) never
+		// fires for these responses.
+		if webSocket == nil && body != nil {
+			body.Close()
+		}
 		return jsutil.ResponseClass.New(jsutil.Null, respInit)
 	}
 	readableStream := func() js.Value {

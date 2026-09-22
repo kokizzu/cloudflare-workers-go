@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"strings"
 )
 
 //go:embed assets
@@ -22,13 +23,15 @@ const (
 
 func main() {
 	var (
-		mode         string
-		runtime      string
-		buildDirPath string
+		mode           string
+		runtime        string
+		buildDirPath   string
+		durableObjects string
 	)
 	flag.StringVar(&mode, "mode", string(ModeTinygo), `build mode: tinygo or go`)
 	flag.StringVar(&runtime, "runtime", string(RuntimeCloudflare), `runtime: cloudflare, browser, or neon`)
 	flag.StringVar(&buildDirPath, "o", defaultBuildDirPath, `output dir path: defaults to "build"`)
+	flag.StringVar(&durableObjects, "durable-objects", "", `comma-separated list of Durable Object class names to define in worker.mjs (e.g. "Counter,Room")`)
 	flag.Parse()
 	if !Mode(mode).IsValid() {
 		flag.PrintDefaults()
@@ -40,13 +43,28 @@ func main() {
 		os.Exit(1)
 		return
 	}
-	if err := runMain(Mode(mode), Runtime(runtime), buildDirPath); err != nil {
+	if err := runMain(Mode(mode), Runtime(runtime), buildDirPath, parseDurableObjects(durableObjects)); err != nil {
 		fmt.Fprintf(os.Stderr, "err: %v", err)
 		os.Exit(1)
 	}
 }
 
-func runMain(mode Mode, runtime Runtime, buildDirPath string) error {
+// parseDurableObjects splits a comma-separated -durable-objects flag value
+// into class names, dropping empty entries (so "" produces nil, and stray
+// whitespace/commas like "Counter, ,Room" don't produce blank class names).
+func parseDurableObjects(s string) []string {
+	var names []string
+	for _, name := range strings.Split(s, ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		names = append(names, name)
+	}
+	return names
+}
+
+func runMain(mode Mode, runtime Runtime, buildDirPath string, durableObjects []string) error {
 	if err := os.RemoveAll(buildDirPath); err != nil {
 		return err
 	}
@@ -62,7 +80,38 @@ func runMain(mode Mode, runtime Runtime, buildDirPath string) error {
 	if err := copyCommonAssets(runtime, buildDirPath); err != nil {
 		return err
 	}
+	if err := appendDurableObjectClasses(buildDirPath, durableObjects); err != nil {
+		return err
+	}
 	return nil
+}
+
+// appendDurableObjectClasses appends one GoDurableObject subclass
+// definition per name in durableObjects to the generated worker.mjs, e.g.
+// for "Counter":
+//
+//	export class Counter extends GoDurableObject { static goClassName = "Counter"; }
+//
+// wrangler.toml's [[durable_objects.bindings]] class_name (and the class
+// this worker.mjs exports for the Durable Object namespace's `new_classes`/
+// `new_sqlite_classes` migration) must match one of these names exactly.
+// If durableObjects is empty, worker.mjs is left untouched.
+func appendDurableObjectClasses(buildDirPath string, durableObjects []string) error {
+	if len(durableObjects) == 0 {
+		return nil
+	}
+	workerPath := path.Join(buildDirPath, "worker.mjs")
+	f, err := os.OpenFile(workerPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	var b strings.Builder
+	for _, name := range durableObjects {
+		fmt.Fprintf(&b, "\nexport class %s extends GoDurableObject { static goClassName = %q; }\n", name, name)
+	}
+	_, err = f.WriteString(b.String())
+	return err
 }
 
 func copyWasmExecJS(mode Mode, buildDirPath string) error {

@@ -1,0 +1,16 @@
+{
+  "name": "<TBD>",
+  "main": "./build/worker.mjs",
+  "compatibility_date": "<TBD>",
+  "build": {
+    "command": "npm run build"
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "COUNTER", "class_name": "Counter" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Counter"] }
+  ]
+}

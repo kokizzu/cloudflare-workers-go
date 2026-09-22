@@ -1,0 +1,68 @@
+{
+  "source": {
+    "package": "@cloudflare/workers-types",
+    "version": "0.0.0-fixture4",
+    "entry": "index.d.ts"
+  },
+  "decls": [
+    {
+      "kind": "interface",
+      "name": "Matrix",
+      "module": "",
+      "doc": "Matrix exercises nested array/record conversions: a [][]float64 field and a [][]string field (each requiring distinct per-nesting-level loop variable names so an inner loop can't shadow the outer one's index/element - see containerSuffix), plus a Record<string, []string> and an Array<Record<string, number>> to cover the mixed map/array nesting combinations that have the same shadowing hazard.",
+      "typeParams": [],
+      "extends": [],
+      "members": [
+        {
+          "kind": "property",
+          "name": "floats",
+          "doc": "",
+          "type": { "k": "array", "elem": { "k": "array", "elem": { "k": "prim", "name": "number" } } },
+          "optional": false,
+          "readonly": false
+        },
+        {
+          "kind": "property",
+          "name": "words",
+          "doc": "",
+          "type": { "k": "array", "elem": { "k": "array", "elem": { "k": "prim", "name": "string" } } },
+          "optional": false,
+          "readonly": false
+        },
+        {
+          "kind": "property",
+          "name": "tags",
+          "doc": "",
+          "type": {
+            "k": "ref",
+            "name": "Record",
+            "args": [
+              { "k": "prim", "name": "string" },
+              { "k": "array", "elem": { "k": "prim", "name": "string" } }
+            ]
+          },
+          "optional": false,
+          "readonly": false
+        },
+        {
+          "kind": "property",
+          "name": "rows",
+          "doc": "",
+          "type": {
+            "k": "array",
+            "elem": {
+              "k": "ref",
+              "name": "Record",
+              "args": [
+                { "k": "prim", "name": "string" },
+                { "k": "prim", "name": "number" }
+              ]
+            }
+          },
+          "optional": false,
+          "readonly": false
+        }
+      ]
+    }
+  ]
+}

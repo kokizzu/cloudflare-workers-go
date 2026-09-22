@@ -1,0 +1,125 @@
+{
+  "source": {
+    "package": "@cloudflare/workers-types",
+    "version": "0.0.0-fixture9",
+    "entry": "index.d.ts"
+  },
+  "decls": [
+    {
+      "kind": "interface",
+      "name": "Base",
+      "module": "",
+      "doc": "",
+      "typeParams": [],
+      "extends": [],
+      "members": [
+        {
+          "kind": "property",
+          "name": "a",
+          "doc": "",
+          "type": {
+            "k": "prim",
+            "name": "string"
+          },
+          "optional": false,
+          "readonly": false
+        },
+        {
+          "kind": "property",
+          "name": "b",
+          "doc": "",
+          "type": {
+            "k": "prim",
+            "name": "number"
+          },
+          "optional": false,
+          "readonly": false
+        },
+        {
+          "kind": "property",
+          "name": "c",
+          "doc": "",
+          "type": {
+            "k": "prim",
+            "name": "boolean"
+          },
+          "optional": false,
+          "readonly": false
+        }
+      ]
+    },
+    {
+      "kind": "alias",
+      "name": "Derived",
+      "module": "",
+      "doc": "Derived exercises tmp/06-codegen-spec.md 5.1's Pick/Omit/Partial-aware intersection flattening: Pick<Partial<Base>, \"a\"> contributes an optional a, Omit<Base, \"a\" | \"b\"> contributes c (a and b dropped), and the object literal contributes d.",
+      "typeParams": [],
+      "type": {
+        "k": "intersection",
+        "types": [
+          {
+            "k": "ref",
+            "name": "Pick",
+            "args": [
+              {
+                "k": "ref",
+                "name": "Partial",
+                "args": [
+                  {
+                    "k": "ref",
+                    "name": "Base",
+                    "args": []
+                  }
+                ]
+              },
+              {
+                "k": "literal",
+                "value": "a"
+              }
+            ]
+          },
+          {
+            "k": "ref",
+            "name": "Omit",
+            "args": [
+              {
+                "k": "ref",
+                "name": "Base",
+                "args": []
+              },
+              {
+                "k": "union",
+                "types": [
+                  {
+                    "k": "literal",
+                    "value": "a"
+                  },
+                  {
+                    "k": "literal",
+                    "value": "b"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "k": "object",
+            "members": [
+              {
+                "kind": "property",
+                "name": "d",
+                "doc": "",
+                "type": {
+                  "k": "prim",
+                  "name": "string"
+                },
+                "optional": false,
+                "readonly": false
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

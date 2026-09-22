@@ -1,0 +1,13 @@
+package: streams
+doc: |
+  Package streams is a third synthetic fixture package, covering the stream
+  type mappings added by tmp/06-codegen-spec.md 3.1.1: WritableStream and
+  ReadableStream at property/return position, ReadableStream and
+  WritableStream at parameter position, and a types: override forcing
+  io.Reader on an otherwise-unresolvable union parameter.
+include:
+  - Streams
+bindings:
+  - Streams
+types:
+  Streams.uploadRaw.params.data: "io.Reader"

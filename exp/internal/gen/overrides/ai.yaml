@@ -1,0 +1,106 @@
+package: ai
+doc: |
+  Package ai provides the Workers AI binding
+  (https://developers.cloudflare.com/workers-ai/).
+
+  Ai.run is a TypeScript overload set keyed by a generic AiModelList[Name]
+  type parameter (six type-level overloads picking apart streaming vs.
+  non-streaming, batch, and raw-response variants); cfgen cannot generate
+  Go from a type parameter indexed like that, so Ai.run itself is
+  hand-written in ai.go, calling straight through to the underlying JS
+  method with a plain model string and js.Value inputs. Run/RunStream/
+  RunTextGeneration/RunTextGenerationStream/RunTextEmbeddings in ai.go
+  build on that, using the toJS/fromJS helpers generated below for
+  AiTextGenerationInput/Output and AiTextEmbeddingsInput/Output.
+
+  Ai.gateway, Ai.aiSearch, Ai.autorag, and Ai.toMarkdown are excluded: they
+  return handle types (AiGateway, AiSearchNamespace, AutoRAG) or overloaded
+  helpers this package doesn't otherwise wrap yet.
+
+  RoleScopedChatInput.role's .d.ts type is a union of the literals "user",
+  "assistant", "system", "tool" plus a `string & NonNullable<unknown>`
+  branch (a common TypeScript idiom for "one of these, but any other string
+  is also fine") — not a pure string-literal union, so cfgen would
+  otherwise fall back to js.Value; it is mapped to plain string instead,
+  since that's what every branch actually is at runtime.
+
+  Model-specific per-model input/output interfaces (the Ai_Cf_* family) and
+  the other AiXxxInput/Output pairs beyond text generation and embeddings
+  are not included: model IDs are passed as a plain string (AiModels'
+  mapped-type keys aren't representable in the IR), so there is no
+  strongly-typed model -> input/output pairing to generate here in the
+  first place. Callers needing one of those shapes can build the request
+  as js.Value and call Ai.Run directly.
+
+  Every included declaration name starting with "Ai" is force-renamed to
+  keep that exact casing (see rename: below): cfgen's default naming would
+  otherwise expand the "ai" acronym per its naming table (ai -> AI, same
+  rule that turns IncomingRequestCfProperties into
+  IncomingRequestCFProperties in the cf package), producing AI/AIOptions/
+  AITextGenerationInput/... — which stutters badly as a type in a package
+  already named ai (ai.AI) and doesn't match Cloudflare's own class name
+  (Ai, not AI). rename keeps ai.Ai, ai.AiOptions, ai.AiTextGenerationInput,
+  and so on, matching the hand-written ai.go call sites (e.g.
+  aiTextGenerationOutputFromJS, not aITextGenerationOutputFromJS).
+
+  AiTextEmbeddingsOutput.data is (number[])[] in the .d.ts, i.e. Go
+  [][]float64 by cfgen's default array-of-array mapping (data is left
+  unmapped here; no types: override is needed).
+include:
+  - Ai
+  - AiOptions
+  - AiTextGenerationInput
+  - AiTextGenerationOutput
+  - RoleScopedChatInput
+  - AiTextEmbeddingsInput
+  - AiTextEmbeddingsOutput
+  - AiModelsSearchParams
+  - AiModelsSearchObject
+  - UsageTags
+  - GatewayOptions
+  - GatewayRetries
+  - AiTextGenerationResponseFormat
+  - AiTextGenerationFunctionsInput
+bindings:
+  - Ai
+rename:
+  Ai: Ai
+  AiOptions: AiOptions
+  AiTextGenerationInput: AiTextGenerationInput
+  AiTextGenerationOutput: AiTextGenerationOutput
+  AiTextEmbeddingsInput: AiTextEmbeddingsInput
+  AiTextEmbeddingsOutput: AiTextEmbeddingsOutput
+  AiModelsSearchParams: AiModelsSearchParams
+  AiModelsSearchObject: AiModelsSearchObject
+  AiTextGenerationResponseFormat: AiTextGenerationResponseFormat
+  AiTextGenerationFunctionsInput: AiTextGenerationFunctionsInput
+types:
+  RoleScopedChatInput.role: "string"
+  AiTextEmbeddingsInput.text: "[]string"
+  # signal is a DOM AbortSignal (fetch-style cancellation); not a
+  # Cloudflare data type and not otherwise supported by jsrt, so left as a
+  # raw escape hatch.
+  AiOptions.signal: "js.Value"
+  # tools is (AiTextGenerationToolInput[] | AiTextGenerationToolLegacyInput[]
+  # | (object & NonNullable<unknown>)) — three structurally unrelated
+  # shapes (two different array-element types plus a TS "object that isn't
+  # null/undefined" idiom), not coverable by any union rule.
+  AiTextGenerationInput.tools: "js.Value"
+  # tool_calls is (AiTextGenerationToolLegacyOutput[] &
+  # AiTextGenerationToolOutput[]): an intersection of two *different*
+  # array-element types, which resolveDataMembers can't flatten (arrays
+  # aren't data-shaped operands) — an artifact of how the upstream .d.ts
+  # encodes "whichever tool-call shape the model actually returned".
+  AiTextGenerationOutput.tool_calls: "js.Value"
+  # metadata is Record<string, number | string | boolean | null | bigint>:
+  # a genuinely heterogeneous value type (mixing several different
+  # primitive kinds, not just literals of one kind), same precedent as
+  # vectorize.yaml's VectorizeVector.metadata/VectorizeQueryOptions.filter.
+  GatewayOptions.metadata: "map[string]any"
+handwritten:
+  - Ai.run
+exclude:
+  - Ai.gateway
+  - Ai.aiSearch
+  - Ai.autorag
+  - Ai.toMarkdown

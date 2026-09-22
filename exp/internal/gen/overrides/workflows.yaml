@@ -1,0 +1,49 @@
+package: workflows
+doc: |
+  Package workflows provides the Workflows binding
+  (https://developers.cloudflare.com/workflows/).
+include:
+  - Workflow
+  - WorkflowInstance
+  - WorkflowInstanceCreateOptions
+  - WorkflowInstanceTerminateOptions
+  - WorkflowInstanceRestartOptions
+  - WorkflowInstanceLocationHint
+  - WorkflowBatchDeleteResult
+  - InstanceStatus
+  - WorkflowRetentionDuration
+bindings:
+  - Workflow
+rename:
+  # sendEvent's single parameter is a destructured object literal in the
+  # .d.ts (`{ type, payload }`); the IR records its "name" as the raw
+  # destructuring pattern source text (including the .d.ts's original
+  # indentation/line breaks), which is not a valid Go identifier on its
+  # own. cfgen's param-rename support (tmp/06-codegen-spec.md 6.2 item 1)
+  # lets a "Decl.method.<rawParamName>" rename key give it a real Go name
+  # instead; the key below is that literal raw text, quoted so its
+  # embedded newlines survive as YAML escapes. It's tied to workers-types'
+  # exact .d.ts formatting for this parameter — if a future workers-types
+  # release reformats the destructuring pattern, this key stops matching
+  # and cfgen regenerates WorkflowInstance.sendEvent with its param named
+  # after the *unmatched* raw text again, which is not a valid Go
+  # identifier and fails to compile; `make gen-bindings-check` (gofmt/go
+  # vet over the regenerated tree) catches that immediately.
+  "WorkflowInstance.sendEvent.{\n    type,\n    payload,\n  }": event
+types:
+  # PARAMS is a TypeScript generic type parameter (the workflow's
+  # user-defined event payload shape); cfgen does not generate Go generics,
+  # so it is passed through as an opaque js.Value.
+  WorkflowInstanceCreateOptions.params: "js.Value"
+  # WorkflowRetentionDuration = WorkflowSleepDuration = (a template-literal
+  # type like `${number} ${"second"|"minute"|...}${"s"|""}` | number),
+  # which extract.ts can't resolve (template-literal types round-trip as
+  # "unsupported"). WorkflowRetentionDuration is only reachable today via
+  # WorkflowInstanceCreateOptions.retention's inline
+  # {successRetention?, errorRetention?} object literal (itself synthesized
+  # into its own data type per 5.1 item 1); since a "types:" override can
+  # only target a synthesized type's *own* field once cfgen has already
+  # invented its name (not known ahead of time in this YAML), this decl is
+  # instead added to include directly and overridden at the decl level, so
+  # the ref from the synthesized type resolves to it.
+  WorkflowRetentionDuration: "js.Value"
