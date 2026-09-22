@@ -87,8 +87,6 @@ Search for `t.Skip("known issue` to find them. At the time of writing:
   a value, not as zero; `AwaitPromise` panics when a Promise rejects with a
   non-object; a panic inside the function passed to `TryCatch` hangs the
   process.
-- `internal/jshttp`: `ToJSRequest` does not set `duplex: "half"` for
-  streaming bodies.
 - `cloudflare/cron`: `scheduledTime` loses milliseconds.
 - `exp/hono`: a rejected `next()` is swallowed.
 - `cloudflare.WaitUntil`: resuming a goroutine from a timer inside the

@@ -142,18 +142,6 @@ func TestToRequest(t *testing.T) {
 
 func TestToJSRequest(t *testing.T) {
 	t.Run("post_with_body", func(t *testing.T) {
-		// known issue: ToJSRequest builds RequestInit with a streaming
-		// (ReadableStream) body but never sets `duplex: "half"`. Node's
-		// fetch implementation (undici) requires that option whenever a
-		// Request is constructed with a streaming body and throws
-		// synchronously without it ("RequestInit: duplex option is
-		// required when sending a body."), which crashes the whole test
-		// binary (this isn't a returned error - it's an uncaught panic
-		// from Value.New, see request.go). This is a real Fetch spec
-		// requirement, not a Node-only quirk, so any body-bearing
-		// ToJSRequest call is untestable here until duplex is set.
-		t.Skip("known issue: ToJSRequest does not set the duplex option required by the Fetch spec for a streaming body, and constructing such a Request panics instead of erroring (see request.go)")
-
 		body := []byte("payload")
 		req, err := http.NewRequest(http.MethodPost, "https://example.com/path", bytes.NewReader(body))
 		if err != nil {
@@ -172,8 +160,15 @@ func TestToJSRequest(t *testing.T) {
 			t.Errorf("headers.get(X-Test) = %q, want %q", got, "1")
 		}
 
-		got := readAllStream(t, jsReq.Get("body"))
-		if !bytes.Equal(got, body) {
+		// The body is read via Request.text() (native JS stream
+		// consumption): reading it through this package's own
+		// ConvertReadableStreamToReadCloser is covered separately by
+		// TestToJSResponse_ReadAll.
+		v, err := jsutil.AwaitPromise(jsReq.Call("text"))
+		if err != nil {
+			t.Fatalf("jsReq.text() error = %v, want nil", err)
+		}
+		if got := v.String(); got != string(body) {
 			t.Errorf("body = %q, want %q", got, body)
 		}
 	})

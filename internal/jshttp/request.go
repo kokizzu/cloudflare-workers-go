@@ -57,6 +57,11 @@ func ToJSRequest(req *http.Request) js.Value {
 	jsReqBody := js.Undefined()
 	if req.Body != nil {
 		jsReqBody = jsutil.ConvertReaderToReadableStream(req.Body)
+		// The Fetch spec requires the duplex option when a Request is
+		// constructed with a streaming body; undici (Node) throws
+		// without it. workerd ignores the option.
+		//   - https://fetch.spec.whatwg.org/#dom-requestinit-duplex
+		jsReqOptions.Set("duplex", "half")
 	}
 	jsReqOptions.Set("body", jsReqBody)
 	jsReq := jsutil.RequestClass.New(req.URL.String(), jsReqOptions)

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/syumai/workers-go/internal/jstest"
+	"github.com/syumai/workers-go/internal/jsutil"
 )
 
 // TestClient_Do_invalidURL relies on Node's global fetch() rejecting for a
@@ -32,12 +33,8 @@ func TestClient_Do_withBindingFake(t *testing.T) {
 	fetcher := newFakeFetcher(t, resVal)
 
 	c := NewClient(WithBinding(fetcher.val))
-	// No request body: jshttp.ToJSRequest streams a non-nil body as a
-	// ReadableStream, and Node's Request/fetch reject a streamed body
-	// without an explicit `duplex: "half"` option (which ToJSRequest does
-	// not set). That is a separate, pre-existing gap; this test sticks to
-	// a bodyless request so it exercises method/header/URL forwarding.
-	req, err := NewRequest(context.Background(), http.MethodPost, "https://example.com/path", nil)
+	wantReqBody := []byte("request payload")
+	req, err := NewRequest(context.Background(), http.MethodPost, "https://example.com/path", bytes.NewReader(wantReqBody))
 	if err != nil {
 		t.Fatalf("NewRequest() error = %v", err)
 	}
@@ -58,6 +55,13 @@ func TestClient_Do_withBindingFake(t *testing.T) {
 	}
 	if got, want := gotReq.Get("headers").Call("get", "X-Test").String(), "1"; got != want {
 		t.Errorf("request header X-Test = %q, want %q", got, want)
+	}
+	v, err := jsutil.AwaitPromise(gotReq.Call("text"))
+	if err != nil {
+		t.Fatalf("request.text() error = %v, want nil", err)
+	}
+	if got := v.String(); got != string(wantReqBody) {
+		t.Errorf("request body = %q, want %q", got, wantReqBody)
 	}
 
 	if res.StatusCode != http.StatusCreated {
