@@ -9,6 +9,7 @@ func TestRuntime_IsValid(t *testing.T) {
 	}{
 		"cloudflare": {runtime: RuntimeCloudflare, want: true},
 		"browser":    {runtime: RuntimeBrowser, want: true},
+		"neon":       {runtime: RuntimeNeon, want: true},
 		"empty":      {runtime: Runtime(""), want: false},
 		"invalid":    {runtime: Runtime("invalid"), want: false},
 	}
@@ -29,6 +30,7 @@ func TestRuntime_AssetFileName(t *testing.T) {
 	}{
 		"cloudflare": {runtime: RuntimeCloudflare, want: "cloudflare.mjs"},
 		"browser":    {runtime: RuntimeBrowser, want: "browser.mjs"},
+		"neon":       {runtime: RuntimeNeon, want: "neon.mjs"},
 		"empty":      {runtime: Runtime(""), want: ".mjs"},
 	}
 	for name, tt := range tests {

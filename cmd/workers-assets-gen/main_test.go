@@ -29,6 +29,10 @@ func TestRunMain(t *testing.T) {
 			mode: ModeGo, runtime: RuntimeBrowser,
 			wantWasmExecF: "wasm_exec_go.js",
 		},
+		"go-neon": {
+			mode: ModeGo, runtime: RuntimeNeon,
+			wantWasmExecF: "wasm_exec_go.js",
+		},
 		"tinygo-cloudflare": {
 			mode: ModeTinygo, runtime: RuntimeCloudflare,
 			wantWasmExecF: "wasm_exec_tinygo.js",
@@ -37,11 +41,15 @@ func TestRunMain(t *testing.T) {
 			mode: ModeTinygo, runtime: RuntimeBrowser,
 			wantWasmExecF: "wasm_exec_tinygo.js",
 		},
+		"tinygo-neon": {
+			mode: ModeTinygo, runtime: RuntimeNeon,
+			wantWasmExecF: "wasm_exec_tinygo.js",
+		},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			if err := runMain(tt.mode, tt.runtime, dir); err != nil {
+			if err := runMain(tt.mode, tt.runtime, dir, nil); err != nil {
 				t.Fatalf("runMain() error = %v", err)
 			}
 
@@ -61,7 +69,14 @@ func TestRunMain(t *testing.T) {
 			if err != nil {
 				t.Fatalf("assets.ReadFile() error = %v", err)
 			}
-			assertFileEqualsBytes(t, filepath.Join(dir, "worker.mjs"), wantWorker)
+			// Neon Functions only loads an entry file named index.mjs or
+			// index.js, so worker.mjs is renamed to index.mjs for that
+			// runtime (see copyCommonAssets in main.go).
+			workerFileName := "worker.mjs"
+			if tt.runtime == RuntimeNeon {
+				workerFileName = "index.mjs"
+			}
+			assertFileEqualsBytes(t, filepath.Join(dir, workerFileName), wantWorker)
 		})
 	}
 }
@@ -79,7 +94,7 @@ func TestRunMain_cleansOutputDir(t *testing.T) {
 		t.Fatalf("os.WriteFile() error = %v", err)
 	}
 
-	if err := runMain(ModeGo, RuntimeCloudflare, dir); err != nil {
+	if err := runMain(ModeGo, RuntimeCloudflare, dir, nil); err != nil {
 		t.Fatalf("runMain() error = %v", err)
 	}
 
@@ -90,14 +105,14 @@ func TestRunMain_cleansOutputDir(t *testing.T) {
 
 func TestRunMain_invalidMode(t *testing.T) {
 	dir := t.TempDir()
-	if err := runMain(Mode("invalid"), RuntimeCloudflare, dir); err == nil {
+	if err := runMain(Mode("invalid"), RuntimeCloudflare, dir, nil); err == nil {
 		t.Error("runMain() error = nil, want non-nil for an invalid mode")
 	}
 }
 
 func TestRunMain_invalidRuntime(t *testing.T) {
 	dir := t.TempDir()
-	if err := runMain(ModeGo, Runtime("invalid"), dir); err == nil {
+	if err := runMain(ModeGo, Runtime("invalid"), dir, nil); err == nil {
 		t.Error("runMain() error = nil, want non-nil for an invalid runtime")
 	}
 }
@@ -109,13 +124,15 @@ func TestRunMain_fileList(t *testing.T) {
 	}{
 		"go-cloudflare":     {mode: ModeGo, runtime: RuntimeCloudflare},
 		"go-browser":        {mode: ModeGo, runtime: RuntimeBrowser},
+		"go-neon":           {mode: ModeGo, runtime: RuntimeNeon},
 		"tinygo-cloudflare": {mode: ModeTinygo, runtime: RuntimeCloudflare},
 		"tinygo-browser":    {mode: ModeTinygo, runtime: RuntimeBrowser},
+		"tinygo-neon":       {mode: ModeTinygo, runtime: RuntimeNeon},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			if err := runMain(tt.mode, tt.runtime, dir); err != nil {
+			if err := runMain(tt.mode, tt.runtime, dir, nil); err != nil {
 				t.Fatalf("runMain() error = %v", err)
 			}
 

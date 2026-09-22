@@ -66,7 +66,7 @@ func TestToResponse(t *testing.T) {
 func TestNewJSResponse(t *testing.T) {
 	t.Run("status_zero_defaults_to_200", func(t *testing.T) {
 		body := io.NopCloser(strings.NewReader("hi"))
-		resp := newJSResponse(0, http.Header{}, 0, body, nil)
+		resp := newJSResponse(0, http.Header{}, 0, body, nil, nil)
 		if got := resp.Get("status").Int(); got != http.StatusOK {
 			t.Errorf("status = %d, want %d", got, http.StatusOK)
 		}
@@ -89,7 +89,7 @@ func TestNewJSResponse(t *testing.T) {
 				t.Skip("status 101 is rejected by Node's Response constructor; only workerd's Response allows it")
 			}
 
-			resp := newJSResponse(status, http.Header{}, 0, nil, nil)
+			resp := newJSResponse(status, http.Header{}, 0, nil, nil, nil)
 			if body := resp.Get("body"); !body.IsNull() {
 				t.Errorf("body = %v, want null", body)
 			}
@@ -102,7 +102,7 @@ func TestNewJSResponse(t *testing.T) {
 		// ConvertReaderToReadableStream branch here, regardless of
 		// contentLength.
 		body := io.NopCloser(strings.NewReader("hello"))
-		resp := newJSResponse(http.StatusOK, http.Header{}, 5, body, nil)
+		resp := newJSResponse(http.StatusOK, http.Header{}, 5, body, nil, nil)
 		if stream := resp.Get("body"); !stream.InstanceOf(jsutil.ReadableStreamClass) {
 			t.Errorf("body = %v, want a ReadableStream", stream)
 		}
@@ -111,7 +111,7 @@ func TestNewJSResponse(t *testing.T) {
 	t.Run("raw_body_takes_priority", func(t *testing.T) {
 		raw := jsutil.ReadableStreamClass.New()
 		body := io.NopCloser(strings.NewReader("ignored, raw body wins"))
-		resp := newJSResponse(http.StatusOK, http.Header{}, 5, body, &raw)
+		resp := newJSResponse(http.StatusOK, http.Header{}, 5, body, &raw, nil)
 		if got := resp.Get("body"); !got.Equal(raw) {
 			t.Errorf("body = %v, want the raw stream %v", got, raw)
 		}
@@ -120,7 +120,7 @@ func TestNewJSResponse(t *testing.T) {
 	t.Run("headers_are_carried_over", func(t *testing.T) {
 		h := http.Header{}
 		h.Set("X-Test", "1")
-		resp := newJSResponse(http.StatusOK, h, 0, nil, nil)
+		resp := newJSResponse(http.StatusOK, h, 0, nil, nil, nil)
 		if got := resp.Get("headers").Call("get", "X-Test").String(); got != "1" {
 			t.Errorf("headers.get(X-Test) = %q, want %q", got, "1")
 		}

@@ -92,10 +92,7 @@ Search for `t.Skip("known issue` to find them. At the time of writing:
 - `internal/jshttp`: `ToHeader` splits values on `,` (breaks `Set-Cookie`);
   `ToRequest` drops `Transfer-Encoding` values after the first comma;
   `ToJSRequest` does not set `duplex: "half"` for streaming bodies.
-- root `handler_js.go`: a panic in the handler goroutine crashes the wasm
-  instance instead of producing an error response.
-- `cloudflare/cron`: `scheduledTime` loses milliseconds; `runScheduler` has
-  no reject path, so a task error or a missing task crashes the process.
+- `cloudflare/cron`: `scheduledTime` loses milliseconds.
 - `exp/hono`: a rejected `next()` is swallowed.
 - `cloudflare.WaitUntil`: resuming a goroutine from a timer inside the
   `waitUntil` callback fails with "Go program has already exited" under

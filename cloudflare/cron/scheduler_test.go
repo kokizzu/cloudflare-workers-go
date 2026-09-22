@@ -2,6 +2,8 @@ package cron
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"syscall/js"
 	"testing"
 	"time"
@@ -9,6 +11,34 @@ import (
 	"github.com/syumai/workers-go/internal/jstest"
 	"github.com/syumai/workers-go/internal/jsutil"
 )
+
+// awaitRejected waits for p to settle and fails the test if it does not
+// settle within 5 seconds or if it resolves instead of rejecting. It
+// mirrors the root package's handler_js_test.go helper of the same name;
+// duplicated here since there is no shared test-helper package for it (see
+// jstest.Await, which only handles the resolve path).
+func awaitRejected(t testing.TB, p js.Value) error {
+	t.Helper()
+	type result struct {
+		v   js.Value
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		v, err := jsutil.AwaitPromise(p)
+		ch <- result{v, err}
+	}()
+	select {
+	case r := <-ch:
+		if r.err == nil {
+			t.Fatalf("promise resolved with %v, want it to reject", r.v)
+		}
+		return r.err
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out after 5s waiting for promise to reject")
+		return nil
+	}
+}
 
 // TestRunScheduler_callsTask verifies that runScheduler (registered on
 // jsutil.Binding as "runScheduler" by this package's init) invokes the task
@@ -50,37 +80,44 @@ func TestRunScheduler_callsTask(t *testing.T) {
 	}
 }
 
-// TestRunScheduler_taskError documents a known issue found while writing
-// this test: unlike handler_js.go's handleRequestCallback and
-// queues/consumer.go's handleBatchCallback, runSchedulerCallback's Promise
-// executor (in this package's init) only captures `resolve`, not `reject` -
-// when the task returns an error, runScheduler's init callback does
-// `panic(err)` in a goroutine instead of rejecting the Promise. An
-// unrecovered panic in any goroutine crashes the whole wasm process (the
-// same failure mode as TestHandleRequest_panicInHandler in the root
-// package), rather than surfacing as a normal Promise rejection.
-//
-// Confirmed empirically with a throwaway probe test: a task returning
-// errors.New("boom"), invoked the same way as TestRunScheduler_callsTask,
-// aborted the process with a Go panic stack trace instead of rejecting the
-// awaited Promise.
+// TestRunScheduler_taskError verifies that a task returning an error
+// rejects the Promise returned by the "runScheduler" binding, instead of
+// crashing the wasm process. runScheduler is now registered via
+// jsutil.RegisterAsyncHandler (see this package's init), which recovers a
+// panic and rejects on a non-nil error return, unlike the bespoke Promise
+// executor this used to be wired up through.
 func TestRunScheduler_taskError(t *testing.T) {
-	t.Skip("known issue: runSchedulerCallback's Promise executor has no reject function - a task error becomes an unrecovered panic(err) in a goroutine (scheduler.go init), which crashes the whole wasm process instead of rejecting the Promise")
+	wantErr := errors.New("boom")
+	ScheduleTaskNonBlock(func(context.Context) error { return wantErr })
+	t.Cleanup(func() { scheduledTask = nil })
+
+	eventObj := jsutil.NewObject()
+	eventObj.Set("cron", "* * * * *")
+	eventObj.Set("scheduledTime", js.ValueOf(float64(0)))
+
+	p := jstest.Binding(t, "runScheduler").Invoke(eventObj)
+	err := awaitRejected(t, p)
+	if !strings.Contains(err.Error(), "boom") {
+		t.Errorf("error = %q, want it to contain %q", err, "boom")
+	}
 }
 
-// TestRunScheduler_beforeSchedule documents a known issue found while
-// writing this test: calling runScheduler before
-// ScheduleTask/ScheduleTaskNonBlock has set scheduledTask calls a nil Task,
-// which is a nil pointer dereference panic. For the same reason as
-// TestRunScheduler_taskError (runSchedulerCallback never wires up a reject
-// function), this crashes the whole wasm process instead of rejecting the
-// Promise.
-//
-// Confirmed empirically with a throwaway probe test: invoking runScheduler
-// with scheduledTask left at its zero value aborted the process with a nil
-// pointer dereference panic instead of rejecting the awaited Promise.
+// TestRunScheduler_beforeSchedule verifies that invoking the "runScheduler"
+// binding before ScheduleTask/ScheduleTaskNonBlock has set scheduledTask
+// (so runScheduler calls a nil Task, a nil pointer dereference) rejects the
+// Promise instead of crashing the wasm process, now that runScheduler's
+// panic is recovered by jsutil.RegisterAsyncHandler.
 func TestRunScheduler_beforeSchedule(t *testing.T) {
-	t.Skip("known issue: runScheduler calls scheduledTask(ctx) with no nil check; before ScheduleTask/ScheduleTaskNonBlock is called this is a nil pointer dereference that (like TestRunScheduler_taskError) crashes the whole wasm process instead of rejecting the Promise")
+	scheduledTask = nil
+
+	eventObj := jsutil.NewObject()
+	eventObj.Set("cron", "* * * * *")
+	eventObj.Set("scheduledTime", js.ValueOf(float64(0)))
+
+	p := jstest.Binding(t, "runScheduler").Invoke(eventObj)
+	if err := awaitRejected(t, p); !strings.Contains(err.Error(), "nil pointer") {
+		t.Errorf("error = %q, want it to mention a nil pointer dereference", err)
+	}
 }
 
 // TestScheduleTask_blocks verifies that ScheduleTask calls Ready() and then

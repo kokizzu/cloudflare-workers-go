@@ -370,18 +370,22 @@ func TestHandleRequest_tooManyArgs(t *testing.T) {
 	}
 }
 
-// TestHandleRequest_panicInHandler documents a known issue: handleRequest
-// runs the registered http.Handler in a bare goroutine (see the go func()
-// in handler_js.go) with no recover, unlike net/http's own server loop. A
-// panicking handler is therefore expected to crash the whole wasm process
-// instead of being turned into an error response.
-//
-// This was confirmed empirically with a throwaway probe test (a handler
-// that does `panic("boom")`, invoked the same way as the other tests in
-// this file): the process aborted with a Go panic stack trace and a
-// non-zero exit instead of the test merely failing, which would have taken
-// down every other test in this package's test binary. See
-// tmp/test-plan/03-binding-contract-tests.md §4.
+// TestHandleRequest_panicInHandler verifies that a panic inside the
+// registered http.Handler is recovered (see jshttp.ServeRequest's deferred
+// recover in internal/jshttp/serve.go) and turned into a 500 response
+// instead of crashing the whole wasm process, unlike the bare, unrecovered
+// goroutine this used to run in. See tmp/test-plan/03-binding-contract-tests.md
+// §4 for the original repro.
 func TestHandleRequest_panicInHandler(t *testing.T) {
-	t.Skip("known issue: a panic inside the handler goroutine started by handleRequest (handler_js.go) is unrecovered and crashes the whole wasm process instead of yielding an error response, unlike net/http's server")
+	ServeNonBlock(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		panic("boom")
+	}))
+
+	reqObj := jstest.Request(t, "GET", "http://example.com/", nil, nil)
+	p := jstest.Binding(t, "handleRequest").Invoke(reqObj)
+	res := jstest.Await(t, p)
+
+	if got := res.Get("status").Int(); got != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", got, http.StatusInternalServerError)
+	}
 }
