@@ -86,9 +86,7 @@ Search for `t.Skip("known issue` to find them. At the time of writing:
 - `internal/jsutil`: `MaybeString` / `MaybeInt` / `MaybeDate` treat `null` as
   a value, not as zero; `AwaitPromise` panics when a Promise rejects with a
   non-object; a panic inside the function passed to `TryCatch` hangs the
-  process; reading a `ConvertReaderToReadableStream` stream back through
-  `ConvertReadableStreamToReadCloser` returns EOF before any data (the
-  priming empty chunk).
+  process.
 - `internal/jshttp`: `ToHeader` splits values on `,` (breaks `Set-Cookie`);
   `ToRequest` drops `Transfer-Encoding` values after the first comma;
   `ToJSRequest` does not set `duplex: "half"` for streaming bodies.

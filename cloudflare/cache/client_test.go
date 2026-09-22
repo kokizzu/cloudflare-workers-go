@@ -95,20 +95,7 @@ func TestCache_Put_Match_Delete(t *testing.T) {
 		t.Fatalf("io.ReadAll(res.Body) error = %v", err)
 	}
 	if string(body) != "hello" {
-		// known issue: internal/jsutil's ConvertReaderToReadableStream /
-		// ConvertReadableStreamToReadCloser round trip returns io.EOF
-		// before delivering any bytes in the Node test runner. The
-		// first Read() drains the stream's initial 0-byte priming
-		// chunk (written by readerToReadableStream.Pull's
-		// "!initialized" branch) into an empty bytes.Buffer and then
-		// immediately calls bytes.Buffer.Read on that still-empty
-		// buffer, which returns (0, io.EOF) per its documented
-		// contract, so io.ReadAll sees EOF right away. Reproduced
-		// directly against jsutil and jshttp (outside of cache) too,
-		// so it is not specific to this fake or to the cache package;
-		// fixing internal/jsutil/stream.go is out of scope for this
-		// test task.
-		t.Skip("known issue: ReadableStream body round trip returns EOF before any bytes in the Node test runner (internal/jsutil/stream.go); see comment above")
+		t.Errorf("body = %q, want %q", body, "hello")
 	}
 }
 

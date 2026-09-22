@@ -47,11 +47,7 @@ func TestConvertBodyToJS_reader(t *testing.T) {
 	if !got.InstanceOf(jsutil.ReadableStreamClass) {
 		t.Errorf("convertBodyToJS(%T) = %v, want a ReadableStream", body, got)
 	}
-	// textFromStream (not jstest.ReadAll) is used here to read the body:
-	// see its doc comment (middleware_js_test.go) for why jstest.ReadAll
-	// cannot be used to check the content of a stream built by
-	// jsutil.ConvertReaderToReadableStream.
-	if s := textFromStream(t, got); s != "hello" {
+	if s := string(jstest.ReadAll(t, got)); s != "hello" {
 		t.Errorf("stream content = %q, want %q", s, "hello")
 	}
 }

@@ -128,8 +128,6 @@ func TestNewJSResponse(t *testing.T) {
 }
 
 func TestToJSResponse_ReadAll(t *testing.T) {
-	t.Skip("known issue: ConvertReaderToReadableStream's first chunk is spuriously treated as EOF by ConvertReadableStreamToReadCloser, so reading a Go-authored JS body back with this package's own helper never sees the real bytes (see internal/jsutil/stream_test.go)")
-
 	body := []byte("response payload")
 	res := &http.Response{
 		StatusCode:    http.StatusOK,

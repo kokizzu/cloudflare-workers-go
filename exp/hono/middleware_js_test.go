@@ -7,34 +7,7 @@ import (
 	"testing"
 
 	"github.com/syumai/workers-go/internal/jstest"
-	"github.com/syumai/workers-go/internal/jsutil"
 )
-
-// textFromStream reads a JS ReadableStream via the standard text() method
-// (native JS stream consumption) by wrapping it in a throwaway Response,
-// instead of jstest.ReadAll.
-//
-// jstest.ReadAll goes through jsutil's readableStreamToReadCloser, which has
-// a bug (found while writing the root package's handler_js_test.go, not
-// previously covered by any test): the first chunk pulled from a stream
-// created by jsutil.ConvertReaderToReadableStream (as convertBodyToJS does
-// for any body that is not already a jsutil.RawJSBodyGetter, e.g. the
-// io.NopCloser(strings.NewReader(...)) used below) is always an empty
-// priming chunk, and readableStreamToReadCloser.Read mishandles it as
-// end-of-stream, silently losing the real content. See handler_js_test.go's
-// textBody doc comment for the full explanation. This is a real bug in
-// internal/jsutil/stream.go (not touched here, per the "no non-test code
-// changes" rule for this PR); textFromStream exists only so
-// TestRunHonoMiddleware_setHeaderStatusBody is not blocked by it.
-func textFromStream(t testing.TB, stream js.Value) string {
-	t.Helper()
-	res := jsutil.ResponseClass.New(stream, jsutil.NewObject())
-	v, err := jsutil.AwaitPromise(res.Call("text"))
-	if err != nil {
-		t.Fatalf("res.text(): %v", err)
-	}
-	return v.String()
-}
 
 // TestRunHonoMiddleware_callsNext verifies that runHonoMiddleware
 // (registered on jsutil.Binding as "runHonoMiddleware" by this package's
@@ -111,10 +84,7 @@ func TestRunHonoMiddleware_setHeaderStatusBody(t *testing.T) {
 	if len(bodyCalls) != 1 {
 		t.Fatalf("body() calls = %d, want 1", len(bodyCalls))
 	}
-	// textFromStream (not jstest.ReadAll) is used here to read the body:
-	// see its doc comment for why jstest.ReadAll cannot be used to check
-	// body content.
-	if got := textFromStream(t, bodyCalls[0]); got != "hi" {
+	if got := string(jstest.ReadAll(t, bodyCalls[0])); got != "hi" {
 		t.Errorf("body() argument content = %q, want %q", got, "hi")
 	}
 }

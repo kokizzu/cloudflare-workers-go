@@ -36,7 +36,12 @@ func (sr *readableStreamToReadCloser) Read(p []byte) (n int, err error) {
 		r := sr.stream.Call("getReader")
 		sr.streamReader = &r
 	}
-	if sr.buf.Len() == 0 {
+	// Keep pulling chunks until the buffer has data. Some chunks may be
+	// empty (e.g. the priming chunk enqueued by readerToReadableStream.Pull
+	// on its first call); an empty chunk must not be treated as EOF, which
+	// is what bytes.Buffer.Read would return if we fell through with an
+	// empty buffer.
+	for sr.buf.Len() == 0 {
 		resultCh := make(chan js.Value)
 		errCh := make(chan error)
 		promise := sr.streamReader.Call("read")

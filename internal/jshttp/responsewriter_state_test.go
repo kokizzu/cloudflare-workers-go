@@ -102,12 +102,19 @@ func TestResponseWriter_HeaderSnapshot(t *testing.T) {
 
 func TestResponseWriter_ToJSResponse(t *testing.T) {
 	w, writer := newTestResponseWriter()
-	defer writer.Close()
 
 	w.Header().Set("X-Test", "1")
 	w.WriteHeader(http.StatusCreated)
-	w.Ready() // mark ready directly; see the body note below for why we
-	// don't drive this via an actual Write/body pipe.
+
+	// Drive the body through the pipe: ToJSResponse exposes w.Reader as a
+	// ReadableStream, and readAllStream below drains it while this
+	// goroutine feeds it.
+	go func() {
+		defer writer.Close()
+		if _, err := writer.Write([]byte("response body")); err != nil {
+			t.Errorf("pipe Write: %v", err)
+		}
+	}()
 
 	resp := w.ToJSResponse()
 	if got := resp.Get("status").Int(); got != http.StatusCreated {
@@ -116,15 +123,9 @@ func TestResponseWriter_ToJSResponse(t *testing.T) {
 	if got := resp.Get("headers").Call("get", "X-Test").String(); got != "1" {
 		t.Errorf("headers.get(X-Test) = %q, want %q", got, "1")
 	}
-
-	// known issue: ConvertReaderToReadableStream's first chunk is
-	// spuriously treated as EOF by ConvertReadableStreamToReadCloser, so
-	// reading a Go-authored body back with this package's own helper never
-	// sees the real bytes (see internal/jsutil/stream_test.go). Skip before
-	// ever starting a writer goroutine, since nothing would drain
-	// w.Reader's pipe once readAllStream stops consuming it after the
-	// (bogus) EOF, which would otherwise leak a goroutine blocked on Write.
-	t.Skip("known issue: ConvertReaderToReadableStream's first chunk is spuriously treated as EOF by ConvertReadableStreamToReadCloser (see internal/jsutil/stream_test.go)")
+	if got := readAllStream(t, resp.Get("body")); string(got) != "response body" {
+		t.Errorf("body = %q, want %q", got, "response body")
+	}
 }
 
 func TestResponseWriter_Flush_noop(t *testing.T) {

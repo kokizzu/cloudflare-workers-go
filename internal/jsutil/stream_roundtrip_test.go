@@ -57,18 +57,6 @@ func TestConvertReaderToReadableStream_ReadAll(t *testing.T) {
 	}
 	for name, size := range sizes {
 		t.Run(name, func(t *testing.T) {
-			// known issue: readerToReadableStream.Pull's first call always
-			// enqueues an empty (0-byte) chunk to "initialize" itself, and
-			// readableStreamToReadCloser.Read writes that chunk into a
-			// bytes.Buffer and then calls buf.Read(p) unconditionally.
-			// bytes.Buffer.Read returns io.EOF when the buffer is empty
-			// regardless of whether the stream actually reported done, so
-			// the very first Read() call always returns (0, io.EOF), and
-			// any real data enqueued afterward is never delivered. Only
-			// the "empty" case happens to produce the right answer, and
-			// only by accident.
-			t.Skip("known issue: ConvertReaderToReadableStream's first chunk is spuriously treated as EOF by ConvertReadableStreamToReadCloser (see stream.go)")
-
 			want := make([]byte, size)
 			for i := range want {
 				want[i] = byte(i % 251)
@@ -105,11 +93,6 @@ func TestConvertReadableStreamToReadCloser_ReadAll(t *testing.T) {
 }
 
 func TestStream_roundTrip(t *testing.T) {
-	// known issue: see the comment in TestConvertReaderToReadableStream_ReadAll;
-	// the same bug makes the very first Read() on the JS side return
-	// io.EOF immediately, so the round trip never observes the real data.
-	t.Skip("known issue: ConvertReaderToReadableStream's first chunk is spuriously treated as EOF by ConvertReadableStreamToReadCloser (see stream.go)")
-
 	want := bytes.Repeat([]byte("round trip "), 1000)
 
 	stream := ConvertReaderToReadableStream(io.NopCloser(bytes.NewReader(want)))
@@ -131,10 +114,9 @@ func TestReadableStreamToReadCloser_Close_cancels(t *testing.T) {
 	var start, cancelFn js.Func
 	start = js.FuncOf(func(_ js.Value, args []js.Value) any {
 		controller := args[0]
-		// Enqueue a non-empty chunk: readableStreamToReadCloser.Read
-		// treats an empty chunk the same as an empty (EOF) buffer (see the
-		// known issue documented on TestConvertReaderToReadableStream_ReadAll),
-		// which isn't what this test is exercising.
+		// Enqueue a non-empty chunk so the first Read below returns data
+		// immediately; cancel-on-close behavior is what this test
+		// exercises, not empty-chunk handling.
 		controller.Call("enqueue", NewUint8Array(1))
 		return js.Undefined()
 	})
