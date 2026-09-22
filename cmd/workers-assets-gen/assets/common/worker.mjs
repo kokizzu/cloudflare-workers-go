@@ -3,10 +3,8 @@ import {
   createRuntimeContext,
   loadModule,
   WorkflowEntrypointBase,
+  WorkerEntrypointBase,
 } from "./runtime.mjs";
-// WorkerEntrypointBase is also exported by every runtime/*.mjs (for a future
-// GoWorkerEntrypoint — see tmp/06-codegen-spec.md 8) but worker.mjs doesn't
-// use it yet.
 
 let mod;
 
@@ -201,5 +199,53 @@ export class GoWorkflowEntrypoint extends WorkflowEntrypointBase {
 
   async run(event, step) {
     return (await this.#bind()).handleWorkflowRun(event, step);
+  }
+}
+
+// GoWorkerEntrypoint is the base class a Go-hosted WorkerEntrypoint (a
+// named entrypoint exposing RPC methods, reached e.g. over a Service
+// binding, plus its own fetch() trigger) subclasses. It follows the same
+// #bind-memoization shape as GoDurableObject/GoWorkflowEntrypoint above,
+// but exposes the bind method as `_bind()` (public by convention, not
+// truly private) instead of a JS private `#bind`: a generated subclass
+// defines its own RPC methods (one per name in -entrypoints=Name:method,...)
+// that must call back into it, and a JS private method declared in this
+// class body is only reachable from methods defined literally in *this*
+// class — not from a subclass's own methods — so it can't stay private.
+//
+// A subclass is generated per WorkerEntrypoint class name by
+// cmd/workers-assets-gen's -entrypoints flag, e.g. for
+// "-entrypoints=MyService:add,greet":
+//   export class MyService extends GoWorkerEntrypoint {
+//     static goClassName = "MyService";
+//     async add(...args) { return (await this._bind()).handleRPC("add", args); }
+//     async greet(...args) { return (await this._bind()).handleRPC("greet", args); }
+//     async fetch(req) { return (await this._bind()).handleEntrypointFetch(req); }
+//   }
+export class GoWorkerEntrypoint extends WorkerEntrypointBase {
+  // goClassName identifies this class to the Go side (rpc.Register's /
+  // rpc.RegisterFetch's className argument), via the "entrypoint" runtime
+  // context entry. A generated subclass sets it explicitly; it falls back
+  // to the JS class name (this.constructor.name) if unset.
+  static goClassName = undefined;
+
+  #binding;
+  #ready;
+
+  async _bind() {
+    if (!this.#ready) {
+      const binding = {};
+      this.#binding = binding;
+      this.#ready = run(
+        createRuntimeContext({
+          env: this.env,
+          ctx: this.ctx,
+          binding,
+          entrypoint: { className: this.constructor.goClassName ?? this.constructor.name },
+        }),
+      );
+    }
+    await this.#ready;
+    return this.#binding;
   }
 }

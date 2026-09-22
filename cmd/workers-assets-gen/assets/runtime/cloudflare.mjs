@@ -19,6 +19,7 @@ export function createRuntimeContext({
   binding,
   durableObject,
   workflow,
+  entrypoint,
 }) {
   return {
     env,
@@ -29,5 +30,6 @@ export function createRuntimeContext({
     binding,
     durableObject,
     workflow,
+    entrypoint,
   };
 }

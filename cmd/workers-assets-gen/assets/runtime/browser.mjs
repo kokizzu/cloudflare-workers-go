@@ -23,12 +23,13 @@ export class WorkerEntrypointBase {
   }
 }
 
-export function createRuntimeContext({ binding, durableObject, workflow }) {
+export function createRuntimeContext({ binding, durableObject, workflow, entrypoint }) {
   return {
     EmailMessage: undefined,
     NonRetryableError: undefined,
     binding,
     durableObject,
     workflow,
+    entrypoint,
   };
 }
