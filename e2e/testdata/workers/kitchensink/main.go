@@ -9,6 +9,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -172,13 +173,6 @@ func handleEnv(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, cloudflare.Getenv(name))
 }
 
-// jsNullString is the literal string syscall/js's Value.String() returns
-// for a JS null value (see the switch in Go's src/syscall/js/js.go). KV's
-// get() resolves to null on a miss, and kv.Namespace.GetString does not
-// special-case that, so a miss surfaces here as exactly this string. This
-// is deliberate: it is the real SDK behavior we want the e2e test to pin.
-const jsNullString = "<null>"
-
 func handleKVItem(w http.ResponseWriter, r *http.Request) {
 	key := strings.TrimPrefix(r.URL.Path, "/kv/")
 	if key == "" {
@@ -208,12 +202,12 @@ func handleKVItem(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	case http.MethodGet:
 		v, err := ns.GetString(key, nil)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		if errors.Is(err, kv.ErrNotFound) {
+			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		if v == jsNullString {
-			w.WriteHeader(http.StatusNotFound)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain")

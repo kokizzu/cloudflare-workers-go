@@ -13,6 +13,7 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -94,14 +95,12 @@ func handleKV(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	case http.MethodGet:
 		v, err := ns.GetString(key, nil)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		if errors.Is(err, kv.ErrNotFound) {
+			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		// See testdata/workers/kitchensink/main.go's jsNullString: a
-		// missing key resolves to a literal "<null>" string.
-		if v == "<null>" {
-			w.WriteHeader(http.StatusNotFound)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain")

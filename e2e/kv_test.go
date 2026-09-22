@@ -48,12 +48,10 @@ func testKVGetMissing(w *worker) func(t *testing.T) {
 		const key = "e2e-never-written"
 
 		// KV.get() resolves to null for a missing key, and
-		// kv.Namespace.GetString does not special-case that: since
-		// syscall/js's Value.String() returns the literal "<null>" for a
-		// JS null, that's what GetString returns. The fixture's
-		// GET /kv/{key} handler treats that literal as "missing" and
-		// answers 404 -- this subtest confirms that's what actually
-		// happens against real KV, not just what the code intends.
+		// kv.Namespace.GetString maps that to kv.ErrNotFound. The
+		// fixture's GET /kv/{key} handler answers 404 for that error --
+		// this subtest confirms that's what actually happens against
+		// real KV, not just what the code intends.
 		resp, body := w.Get(t, "/kv/"+key)
 		if resp.StatusCode != http.StatusNotFound {
 			t.Errorf("status = %d, want %d (body = %q)", resp.StatusCode, http.StatusNotFound, body)

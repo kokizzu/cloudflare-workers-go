@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 
@@ -91,12 +92,12 @@ func handleQueueReceived(w http.ResponseWriter, r *http.Request) {
 	messages := make([]string, 0, len(result.Keys))
 	for _, k := range result.Keys {
 		v, err := ns.GetString(k.Name, nil)
+		if errors.Is(err, kv.ErrNotFound) {
+			continue
+		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
-		}
-		if v == jsNullString {
-			continue
 		}
 		messages = append(messages, v)
 	}

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"time"
@@ -61,12 +62,12 @@ func handleWaitUntilResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, err := ns.GetString(waitUntilKey, nil)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if errors.Is(err, kv.ErrNotFound) {
+		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	if v == jsNullString {
-		w.WriteHeader(http.StatusNotFound)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain")
