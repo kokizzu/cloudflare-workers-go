@@ -51,9 +51,9 @@ func Connect(ctx context.Context, addr string, opts *SocketOptions) (net.Conn, e
 		return nil, err
 	}
 	optionsObj := opts.toJS()
-	sockVal, err := jsutil.TryCatch(js.FuncOf(func(_ js.Value, args []js.Value) any {
+	sockVal, err := jsutil.TryCatch(func() js.Value {
 		return connect.Invoke(addr, optionsObj)
-	}))
+	})
 	if err != nil {
 		return nil, err
 	}

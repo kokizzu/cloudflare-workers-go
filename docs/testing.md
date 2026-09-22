@@ -83,8 +83,6 @@ Package-specific fakes (`fake_kv_test.go`, `fake_bucket_test.go`,
 
 Search for `t.Skip("known issue` to find them. At the time of writing:
 
-- `internal/jsutil`: a panic inside the function passed to `TryCatch` hangs
-  the process.
 - `cloudflare.WaitUntil`: resuming a goroutine from a timer inside the
   `waitUntil` callback fails with "Go program has already exited" under
   workerd (E2E `waituntil/runs_after_response`).
