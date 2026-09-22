@@ -109,18 +109,6 @@ func TestToRequest(t *testing.T) {
 	})
 
 	t.Run("transfer_encoding_split", func(t *testing.T) {
-		// known issue: ToRequest first runs the headers through ToHeader,
-		// which (see header_test.go) already splits a comma-joined value
-		// like "chunked, gzip" into two separate Transfer-Encoding header
-		// values ["chunked", " gzip"]. It then does
-		// strings.Split(header.Get("Transfer-Encoding"), ",") on top of
-		// that (request.go), but http.Header.Get only returns the first
-		// value, so everything after the first comma (here, "gzip") is
-		// silently dropped instead of ending up in TransferEncoding. This
-		// is exactly the interaction flagged as a likely bug source in
-		// tmp/test-plan/03-binding-contract-tests.md §4.
-		t.Skip("known issue: ToRequest silently drops Transfer-Encoding values after the first comma (see request.go and header.go)")
-
 		header := http.Header{"Transfer-Encoding": {"chunked, gzip"}}
 		jsReq := newFakeJSRequest(t, http.MethodPost, "https://example.com/", header, []byte("x"))
 

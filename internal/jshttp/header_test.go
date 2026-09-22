@@ -27,21 +27,16 @@ func TestToHeader(t *testing.T) {
 		h.Call("append", "X-Multi", "b")
 
 		got := ToHeader(h)
-		// NOTE (current behavior, not necessarily desired): the Headers
-		// object joins repeated values for the same name with ", " before
-		// ToHeader ever sees them, and ToHeader splits back on "," without
-		// trimming, so the second value keeps a leading space. See
-		// header.go and the Set-Cookie case below, where the same splitting
-		// corrupts values that legitimately contain a comma.
-		want := []string{"a", " b"}
+		// The Headers object joins repeated values for the same name with
+		// ", " before ToHeader ever sees them; ToHeader splits them back
+		// on "," and trims the join whitespace.
+		want := []string{"a", "b"}
 		if !reflect.DeepEqual(got["X-Multi"], want) {
 			t.Errorf("ToHeader()[X-Multi] = %q, want %q", got["X-Multi"], want)
 		}
 	})
 
 	t.Run("set_cookie_with_comma", func(t *testing.T) {
-		t.Skip("known issue: ToHeader splits header values on comma, corrupting Set-Cookie values that contain one (see header.go)")
-
 		h := jsutil.HeadersClass.New()
 		h.Call("append", "Set-Cookie", "a=1; Expires=Wed, 09 Jun 2021 10:18:14 GMT")
 		h.Call("append", "Set-Cookie", "b=2; Path=/")
@@ -90,11 +85,9 @@ func TestToJSHeader(t *testing.T) {
 }
 
 func TestHeader_roundTrip(t *testing.T) {
-	// Use single-valued headers only: round-tripping a multi-value header
-	// through ToJSHeader/ToHeader hits the comma-splitting behavior
-	// documented in TestToHeader, so it isn't a lossless round trip.
 	want := http.Header{
 		"X-Test":       {"1"},
+		"X-Multi":      {"a", "b"},
 		"Content-Type": {"text/plain"},
 	}
 

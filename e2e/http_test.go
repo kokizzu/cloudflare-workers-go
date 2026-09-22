@@ -85,24 +85,20 @@ func TestKitchenSink(t *testing.T) {
 		}
 		// The underlying fetch Headers object combines same-name headers
 		// into a single "a, b" (comma-space) entry, and
-		// internal/jshttp.ToHeader splits entries on a bare "," without
-		// trimming, so the second value comes back as " b" (leading
-		// space) rather than "b".
+		// internal/jshttp.ToHeader splits them back and trims the join
+		// whitespace.
 		want := []string{"a", "b"}
 		if got := got.Headers["X-Test"]; !equalStringSlices(got, want) {
-			t.Skipf("known issue: internal/jshttp.ToHeader splits combined multi-value headers on \",\" without trimming whitespace; got X-Test = %v, want %v", got, want)
+			t.Errorf("X-Test = %v, want %v", got, want)
 		}
 	})
 
 	t.Run("echo/set_cookie_with_embedded_comma", func(t *testing.T) {
-		// internal/jshttp.ToHeader (ToHeader in internal/jshttp/header.go)
-		// reconstructs multi-value headers by splitting each Headers
-		// entry on ",". A single Set-Cookie value that itself contains a
-		// comma (e.g. an Expires date) gets incorrectly split into two
-		// header values. This subtest exists to observe the real-runtime
-		// behavior; if the SDK has since been fixed to preserve the
-		// header as one value, tighten this assertion instead of
-		// skipping.
+		// A Set-Cookie value that itself contains a comma (e.g. an
+		// Expires date) must survive as a single header value:
+		// internal/jshttp.ToHeader reads cookies via
+		// Headers.getSetCookie() instead of splitting the combined
+		// entries() value.
 		const cookie = "a=1; Expires=Wed, 21 Oct 2015 07:28:00 GMT"
 		headers := http.Header{"Set-Cookie": {cookie}}
 		resp, body := w.Do(t, http.MethodGet, "/echo", headers, nil)
@@ -115,7 +111,7 @@ func TestKitchenSink(t *testing.T) {
 		}
 		values := got.Headers["Set-Cookie"]
 		if len(values) != 1 || values[0] != cookie {
-			t.Skipf("known issue: Set-Cookie (or any header value containing a comma) is split by internal/jshttp.ToHeader; got Set-Cookie = %v, want [%q]", values, cookie)
+			t.Errorf("Set-Cookie = %v, want [%q]", values, cookie)
 		}
 	})
 

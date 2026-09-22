@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"syscall/js"
 
 	"github.com/syumai/workers-go/internal/jsutil"
@@ -43,7 +42,7 @@ func ToRequest(req js.Value) (*http.Request, error) {
 		Header:           header,
 		Body:             ToBody(bodyVal),
 		ContentLength:    contentLength,
-		TransferEncoding: strings.Split(header.Get("Transfer-Encoding"), ","),
+		TransferEncoding: header.Values("Transfer-Encoding"),
 		Host:             header.Get("Host"),
 		RemoteAddr:       header.Get("Cf-Connecting-Ip"),
 	}, nil
