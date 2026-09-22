@@ -18,6 +18,12 @@ type ResponseWriter struct {
 	ReadyCh     chan struct{}
 	Once        sync.Once
 	RawJSBody   *js.Value
+
+	// webSocket, when set via SetWebSocket, is attached to the Response
+	// built by ToJSResponse as ResponseInit.webSocket, forcing status 101
+	// and a null body. It is the zero js.Value (IsUndefined() == true)
+	// until SetWebSocket is called.
+	webSocket js.Value
 }
 
 var (
@@ -50,6 +56,19 @@ func (w *ResponseWriter) WriteRawJSBody(body js.Value) {
 	w.RawJSBody = &body
 }
 
+// SetWebSocket attaches ws (the client end of a WebSocketPair) to the
+// Response ToJSResponse builds: the response is upgraded to status 101
+// Switching Protocols with ResponseInit.webSocket set to ws and no body,
+// regardless of what WriteHeader/Write were called with.
+//
+// Callers reach this indirectly through exp/cloudflare/websocket.Upgrade,
+// which type-asserts the http.ResponseWriter it is given against an
+// interface{ SetWebSocket(js.Value) } rather than importing this package's
+// concrete type directly.
+func (w *ResponseWriter) SetWebSocket(ws js.Value) {
+	w.webSocket = ws
+}
+
 // Flush is a no-op implementation of http.Flusher.
 //
 // * PipeWriter does not have buffer, and JS-side Response does not have flush method.
@@ -63,5 +82,9 @@ func (w *ResponseWriter) Flush() {
 //   - Response: https://developer.mozilla.org/docs/Web/API/Response
 func (w *ResponseWriter) ToJSResponse() js.Value {
 	contentLength, _ := strconv.ParseInt(w.HeaderValue.Get("Content-Length"), 10, 64)
-	return newJSResponse(w.StatusCode, w.HeaderValue, contentLength, w.Reader, w.RawJSBody)
+	var webSocket *js.Value
+	if !w.webSocket.IsUndefined() {
+		webSocket = &w.webSocket
+	}
+	return newJSResponse(w.StatusCode, w.HeaderValue, contentLength, w.Reader, w.RawJSBody, webSocket)
 }

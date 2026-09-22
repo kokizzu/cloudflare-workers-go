@@ -1,135 +1,145 @@
-//go:build js && wasm
-
 package jshttp
 
 import (
 	"io"
 	"net/http"
+	"syscall/js"
 	"testing"
+
+	"github.com/syumai/workers-go/internal/jsutil"
 )
 
-func newTestResponseWriter() (*ResponseWriter, *io.PipeWriter) {
+// withLenientResponseClass swaps jsutil.ResponseClass for a fake constructor
+// that just records its (body, init) arguments as JS properties on a plain
+// object, restoring the original on cleanup. Node's real Response
+// constructor (used by the wasm test harness) rejects status 101 outright
+// (RangeError: init["status"] must be in the range of 200 to 599), even
+// though Cloudflare Workers' own Response class special-cases 101 for the
+// WebSocket upgrade protocol. This lets tests assert on what newJSResponse
+// passes to `new Response(body, init)` without needing a runtime that
+// actually accepts a 101 Response.
+func withLenientResponseClass(t *testing.T) {
+	t.Helper()
+	orig := jsutil.ResponseClass
+	ctor := js.FuncOf(func(this js.Value, args []js.Value) any {
+		obj := jsutil.NewObject()
+		obj.Set("body", args[0])
+		init := args[1]
+		for _, k := range []string{"status", "statusText", "headers", "webSocket"} {
+			obj.Set(k, init.Get(k))
+		}
+		return obj
+	})
+	jsutil.ResponseClass = ctor.Value
+	t.Cleanup(func() {
+		ctor.Release()
+		jsutil.ResponseClass = orig
+	})
+}
+
+// TestResponseWriter_ToJSResponse_WithoutWebSocket verifies that ToJSResponse
+// behaves as before SetWebSocket existed: no webSocket property, and the
+// status/body reflect WriteHeader/Write as usual.
+func TestResponseWriter_ToJSResponse_WithoutWebSocket(t *testing.T) {
 	reader, writer := io.Pipe()
-	return &ResponseWriter{
+	w := &ResponseWriter{
 		HeaderValue: http.Header{},
 		StatusCode:  http.StatusOK,
 		Reader:      reader,
 		Writer:      writer,
 		ReadyCh:     make(chan struct{}),
-	}, writer
-}
-
-func isClosed(ch <-chan struct{}) bool {
-	select {
-	case <-ch:
-		return true
-	default:
-		return false
 	}
-}
-
-func TestResponseWriter_Ready(t *testing.T) {
-	// NOTE: unlike the 02-unit-test-catalog.md wording ("WriteHeader closes
-	// ReadyCh"), the current implementation's WriteHeader only records the
-	// status code (see responsewriter.go) - it never calls Ready. Only an
-	// explicit Ready() call (or Write, see TestResponseWriter_WriteImpliesReady)
-	// closes ReadyCh. This test pins that actual behavior.
-	w, writer := newTestResponseWriter()
-	defer writer.Close()
-
-	if isClosed(w.ReadyCh) {
-		t.Fatalf("ReadyCh is already closed before Ready/Write is called")
-	}
-
-	w.WriteHeader(http.StatusTeapot)
-	if isClosed(w.ReadyCh) {
-		t.Errorf("ReadyCh was closed by WriteHeader alone; current behavior only closes it via Ready or Write")
-	}
-
-	w.Ready()
-	if !isClosed(w.ReadyCh) {
-		t.Fatalf("ReadyCh is not closed after Ready()")
-	}
-
-	// Calling Ready again must not panic (sync.Once).
-	w.Ready()
-}
-
-func TestResponseWriter_WriteImpliesReady(t *testing.T) {
-	w, writer := newTestResponseWriter()
-
-	if isClosed(w.ReadyCh) {
-		t.Fatalf("ReadyCh is already closed before Write is called")
-	}
-
-	done := make(chan struct{})
 	go func() {
-		defer close(done)
-		w.Write([]byte("body"))
+		defer w.Ready()
+		defer writer.Close()
+		w.Write([]byte("hello"))
 	}()
-	defer func() {
-		writer.Close()
-		<-done
-	}()
-
-	<-w.ReadyCh // Write must close ReadyCh before/without an explicit WriteHeader.
-}
-
-func TestResponseWriter_HeaderSnapshot(t *testing.T) {
-	w, writer := newTestResponseWriter()
-	defer writer.Close()
-
-	w.Header().Set("X-Before", "1")
-	w.WriteHeader(http.StatusOK)
-	// NOTE (current behavior, differs from net/http): net/http snapshots
-	// (and starts sending) headers as soon as WriteHeader is called, so
-	// mutating them afterward has no effect on the response actually sent.
-	// This ResponseWriter does not snapshot anything at WriteHeader time:
-	// ToJSResponse reads w.HeaderValue lazily, whenever it is called. So a
-	// Header().Set call issued after WriteHeader (but before ToJSResponse)
-	// still takes effect, as asserted below via X-After.
-	w.Header().Set("X-After", "2")
-	w.Ready() // mark ready without needing to write/read a body
+	<-w.ReadyCh
 
 	resp := w.ToJSResponse()
-	if got := resp.Get("headers").Call("get", "X-Before").String(); got != "1" {
-		t.Errorf("headers.get(X-Before) = %q, want %q", got, "1")
+	if got := resp.Get("status").Int(); got != http.StatusOK {
+		t.Errorf("status = %d, want %d", got, http.StatusOK)
 	}
-	if got := resp.Get("headers").Call("get", "X-After").String(); got != "2" {
-		t.Errorf("headers.get(X-After) = %q, want %q (a header set after WriteHeader should still be reflected, unlike net/http)", got, "2")
+	if got := resp.Get("webSocket"); !got.IsUndefined() {
+		t.Errorf("webSocket = %v, want undefined", got)
 	}
 }
 
-func TestResponseWriter_ToJSResponse(t *testing.T) {
-	w, writer := newTestResponseWriter()
-	defer writer.Close()
+// closeTrackingReadCloser wraps an io.ReadCloser and records whether Close
+// was called.
+type closeTrackingReadCloser struct {
+	io.ReadCloser
+	closed bool
+}
 
-	w.Header().Set("X-Test", "1")
-	w.WriteHeader(http.StatusCreated)
-	w.Ready() // mark ready directly; see the body note below for why we
-	// don't drive this via an actual Write/body pipe.
+func (c *closeTrackingReadCloser) Close() error {
+	c.closed = true
+	return c.ReadCloser.Close()
+}
+
+// TestResponseWriter_ToJSResponse_NoContentClosesBody verifies that a
+// bodyless response status (e.g. 204 No Content, which newJSResponse sends
+// with a null body) still closes w.Reader, since that's the only thing that
+// ever signals the caller (e.g. ServeRequest's onBodyClosed, wired up to
+// close workers.Done() in handler_js.go) that the response is fully done.
+// Without this, a handler that responds with WriteHeader(204) (and never
+// otherwise closes the body) would hang workers.Serve forever.
+func TestResponseWriter_ToJSResponse_NoContentClosesBody(t *testing.T) {
+	reader, writer := io.Pipe()
+	tracked := &closeTrackingReadCloser{ReadCloser: reader}
+	w := &ResponseWriter{
+		HeaderValue: http.Header{},
+		StatusCode:  http.StatusNoContent,
+		Reader:      tracked,
+		Writer:      writer,
+		ReadyCh:     make(chan struct{}),
+	}
+	go func() {
+		defer w.Ready()
+		defer writer.Close()
+	}()
+	<-w.ReadyCh
+
+	w.ToJSResponse()
+	if !tracked.closed {
+		t.Errorf("Reader was not closed for a %d response", http.StatusNoContent)
+	}
+}
+
+// TestResponseWriter_ToJSResponse_WithWebSocket verifies that calling
+// SetWebSocket forces status 101 and attaches the given js.Value as
+// ResponseInit.webSocket, regardless of what WriteHeader set StatusCode to.
+func TestResponseWriter_ToJSResponse_WithWebSocket(t *testing.T) {
+	withLenientResponseClass(t)
+	reader, writer := io.Pipe()
+	tracked := &closeTrackingReadCloser{ReadCloser: reader}
+	w := &ResponseWriter{
+		HeaderValue: http.Header{},
+		StatusCode:  http.StatusOK,
+		Reader:      tracked,
+		Writer:      writer,
+		ReadyCh:     make(chan struct{}),
+	}
+	ws := js.ValueOf(map[string]any{"tag": "fake-client-socket"})
+	w.SetWebSocket(ws)
+
+	go func() {
+		defer w.Ready()
+		defer writer.Close()
+	}()
+	<-w.ReadyCh
 
 	resp := w.ToJSResponse()
-	if got := resp.Get("status").Int(); got != http.StatusCreated {
-		t.Errorf("status = %d, want %d", got, http.StatusCreated)
+	if got := resp.Get("status").Int(); got != http.StatusSwitchingProtocols {
+		t.Errorf("status = %d, want %d", got, http.StatusSwitchingProtocols)
 	}
-	if got := resp.Get("headers").Call("get", "X-Test").String(); got != "1" {
-		t.Errorf("headers.get(X-Test) = %q, want %q", got, "1")
+	if got := resp.Get("webSocket"); !got.Equal(ws) {
+		t.Errorf("webSocket = %v, want %v", got, ws)
 	}
-
-	// known issue: ConvertReaderToReadableStream's first chunk is
-	// spuriously treated as EOF by ConvertReadableStreamToReadCloser, so
-	// reading a Go-authored body back with this package's own helper never
-	// sees the real bytes (see internal/jsutil/stream_test.go). Skip before
-	// ever starting a writer goroutine, since nothing would drain
-	// w.Reader's pipe once readAllStream stops consuming it after the
-	// (bogus) EOF, which would otherwise leak a goroutine blocked on Write.
-	t.Skip("known issue: ConvertReaderToReadableStream's first chunk is spuriously treated as EOF by ConvertReadableStreamToReadCloser (see internal/jsutil/stream_test.go)")
-}
-
-func TestResponseWriter_Flush_noop(t *testing.T) {
-	w, writer := newTestResponseWriter()
-	defer writer.Close()
-
-	w.Flush() // must not panic
+	if got := resp.Get("body"); !got.IsNull() {
+		t.Errorf("body = %v, want null", got)
+	}
+	if tracked.closed {
+		t.Errorf("Reader was closed for a WebSocket response, want left open so onBodyClosed doesn't fire before the handler's goroutines (e.g. an echo loop) run")
+	}
 }

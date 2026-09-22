@@ -1,0 +1,29 @@
+package: dispatch
+doc: |
+  Package dispatch provides the Workers for Platforms dynamic dispatch
+  binding (https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/get-started/dynamic-dispatch/):
+  DispatchNamespace, DynamicDispatchOptions, and DynamicDispatchLimits.
+
+  DispatchNamespace.get returns a Fetcher, which (like Request/Response) has
+  no generated Go type of its own — it's left as js.Value, a raw escape
+  hatch, by the standard "ref not in include" fallback. dispatch.go's
+  hand-written GetClient wraps Get and bridges that js.Value straight into
+  cloudflare/fetch.NewClient(fetch.WithBinding(v)), the same way
+  exp/cloudflare/hyperdrive.Hyperdrive.Connect bridges a synchronous JS
+  return value into another package's Go type.
+
+  DispatchNamespace.get's args parameter and DynamicDispatchOptions.outbound
+  are both TypeScript index-signature object types ({ [key: string]: any }),
+  which cfgen's inline-object synthesis doesn't recognize as a Record-style
+  map on its own (unlike a named Record<string, T> ref) — both are
+  overridden to map[string]any below, per tmp/06-codegen-spec.md 6.1 item 3.
+include:
+  - DispatchNamespace
+  - DynamicDispatchOptions
+  - DynamicDispatchLimits
+bindings:
+  - DispatchNamespace
+types:
+  DispatchNamespace.get.params.args: "map[string]any"
+  DispatchNamespace.get.returns: "js.Value"
+  DynamicDispatchOptions.outbound: "map[string]any"

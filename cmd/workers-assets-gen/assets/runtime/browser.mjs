@@ -4,8 +4,10 @@ export async function loadModule() {
   return await modPromise;
 }
 
-export function createRuntimeContext({ binding }) {
+export function createRuntimeContext({ binding, durableObject }) {
   return {
+    EmailMessage: undefined,
     binding,
+    durableObject,
   };
 }

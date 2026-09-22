@@ -41,9 +41,7 @@ func convertArgs(args []driver.NamedValue) []any {
 	argValues := make([]any, len(args))
 	for i, arg := range args {
 		if src, ok := arg.Value.([]byte); ok {
-			dst := jsutil.Uint8ArrayClass.New(len(src))
-			js.CopyBytesToJS(dst, src)
-			argValues[i] = dst
+			argValues[i] = jsutil.BytesToJS(src)
 		} else {
 			argValues[i] = arg.Value
 		}

@@ -1,0 +1,14 @@
+package: basket
+doc: |
+  Package basket is a sixth synthetic fixture package, covering the
+  tmp/06-codegen-spec.md 5.1 items 1 and 2 cfgen extensions: named nested
+  data types synthesized for inline object type literals (in field, getter,
+  method param, and method return position) and the union default rules
+  (string/literal mix, numeric literal union, boolean/literal mix, object-
+  literal union merge, and single-included-ref union resolution).
+include:
+  - KnownMeta
+  - Config
+  - Catalog
+bindings:
+  - Catalog

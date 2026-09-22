@@ -1,0 +1,120 @@
+package: email
+doc: |
+  Package email provides the Email Workers binding
+  (https://developers.cloudflare.com/email-routing/email-workers/) and the
+  ForwardableEmailMessage passed to a Worker's email(message, env, ctx)
+  handler (registered from exp/cloudflare/email's sibling hand-written
+  email.go via jsutil.RegisterAsyncHandler("handleEmail", ...) and
+  cmd/workers-assets-gen/assets/common/worker.mjs's email export).
+
+  EmailMessage (the outbound message type SendEmail.send and
+  ForwardableEmailMessage.reply take) is deliberately left out of include:.
+  In workers-types it is an ambient global interface exposing only
+  readonly from/to getters — a stub for the real cloudflare:email module
+  class (`new EmailMessage(from, to, raw)`), which isn't represented in the
+  extracted IR at all (extract.ts only walks .d.ts top-level declarations,
+  not runtime module exports). Generating a data type from that from/to-only
+  stub would be actively wrong here: SendEmail.send and
+  ForwardableEmailMessage.reply need to pass the real class instance
+  (constructed from the runtime's own EmailMessage constructor, carrying
+  the raw MIME content) through unchanged, not a plain {from, to} object
+  encoded by a generated toJS(). So EmailMessage is left out of include:,
+  which makes every ref to it in this package fall back to the standard
+  "ref exists in the IR but not in this package's include list -> js.Value"
+  path (see exp/cloudflare/README.md's type mapping table) instead of a
+  lossy generated struct. The hand-written email.go's own EmailMessage type
+  fills that gap: it holds the real JS instance (obtained via
+  cfruntimecontext.GetRuntimeContextValue("EmailMessage"), set by the
+  runtime shims in cmd/workers-assets-gen/assets/runtime/{cloudflare,browser}.mjs)
+  and exposes JSValue() for SendEmail.Send/ForwardableEmailMessage.Reply to
+  pass straight through as the js.Value parameter cfgen already generates
+  for them.
+
+  ForwardableEmailMessage still gets From()/To() getters despite
+  EmailMessage being excluded from include:, because cfgen's extends
+  flattening resolves ancestor types against the full IR, not just this
+  package's include list.
+
+  SendEmail.send and ForwardableEmailMessage.reply are each overloaded on a
+  plain (from, to, raw) EmailMessage vs. a builder-object
+  (EmailMessageBuilder / EmailReplyMessageBuilder) form. The plain
+  EmailMessage overload (index 0 for both) is generated as Send/Reply.
+  The builder overload (index 1) is generated as SendBuilder/ReplyBuilder
+  (tmp/06-codegen-spec.md 6.2 item 2): EmailMessageBuilder is an alias for
+  an intersection (EmailReplyMessageBuilder & EmailDestinations) that 5.1's
+  intersection-flattening resolves into a plain data struct, the same way
+  as GeoCombined in cfgen's own golden-test fixture; EmailReplyMessageBuilder
+  is an ordinary interface data type. Both are included below so cfgen
+  generates them (and their own dependencies, EmailAddress and
+  EmailAttachment) as named Go structs instead of js.Value.
+include:
+  - SendEmail
+  - ForwardableEmailMessage
+  - EmailSendResult
+  - EmailMessageBuilder
+  - EmailReplyMessageBuilder
+  - EmailAddress
+  - EmailAttachment
+bindings:
+  - SendEmail
+types:
+  # Size in bytes; matches the R2Object.size / R2UploadedPart.partNumber
+  # precedent in r2.yaml for byte-count-ish number fields.
+  ForwardableEmailMessage.rawSize: "int"
+  # EmailMessage is deliberately excluded from include: (see the package
+  # doc comment above) — these two overrides just make the resulting
+  # js.Value fallback for Send/Reply's message parameter an explicit,
+  # documented choice instead of cfgen's generic "ref not in include"
+  # warning.
+  SendEmail.send.params.message: "js.Value"
+  ForwardableEmailMessage.reply.params.message: "js.Value"
+  # EmailReplyMessageBuilder.from/.replyTo are each `string |
+  # EmailAddress`: a two-branch union mixing a plain string with a ref,
+  # which none of 5.1 item 2's default union rules cover (it's not
+  # all-stringy since one branch is a ref, not all-ref since the other
+  # branch is a plain string, and doesn't merge as a data shape since a
+  # bare string branch has no members) — it would otherwise silently fall
+  # back to js.Value with a warning. This override just makes that
+  # js.Value fallback an explicit, documented choice: the caller passes
+  # either a Go string (via js.ValueOf) or an *EmailAddress's .JSValue()/
+  # a hand-built {name, email} js.Value.
+  EmailReplyMessageBuilder.from: "js.Value"
+  EmailReplyMessageBuilder.replyTo: "js.Value"
+  # EmailAttachment is itself a top-level alias for a two-branch union of
+  # inline object literals discriminated on a "disposition" string
+  # literal ("inline" | "attachment"), each with a differently-shaped
+  # rest (contentId is required for "inline", absent for "attachment").
+  # cfgen's union-to-data-struct merge (5.1 item 1) only fires for a
+  # union encountered directly in field/param/return position via
+  # synthesizeDataType's curNameHint mechanism, not for a *named*
+  # top-level alias's own union body — so without this override it falls
+  # back to js.Value with a warning anyway (same outcome, undocumented).
+  # This makes that choice explicit; same precedent as
+  # WorkflowRetentionDuration in workflows.yaml. Overriding it here also
+  # silences the same "unsupported union" warning that would otherwise
+  # repeat once per field typed EmailAttachment[]
+  # (EmailMessageBuilder.attachments, EmailReplyMessageBuilder.attachments)
+  # — those fields resolve straight to []js.Value via this override
+  # instead of trying (and failing) to flatten EmailAttachment's own body
+  # inline.
+  EmailAttachment: "js.Value"
+  # EmailMessageBuilder (the intersection-flattened merge of
+  # EmailReplyMessageBuilder & EmailDestinations) re-encounters
+  # from/replyTo under its own decl name, so the two overrides above
+  # don't cover it — "types:" keys are matched against the decl doing
+  # the resolving, not the field's origin decl. to/cc/bcc
+  # (EmailDestinations' own fields) are each a 3-way `string |
+  # EmailAddress | Array<string | EmailAddress>` union, same
+  # can't-merge-a-bare-string-branch reasoning as from/replyTo above.
+  EmailMessageBuilder.from: "js.Value"
+  EmailMessageBuilder.replyTo: "js.Value"
+  EmailMessageBuilder.to: "js.Value"
+  EmailMessageBuilder.cc: "js.Value"
+  EmailMessageBuilder.bcc: "js.Value"
+overloads:
+  SendEmail.send:
+    - { index: 0, name: Send }
+    - { index: 1, name: SendBuilder }
+  ForwardableEmailMessage.reply:
+    - { index: 0, name: Reply }
+    - { index: 1, name: ReplyBuilder }

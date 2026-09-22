@@ -107,12 +107,12 @@ func ConvertReadableStreamToReadCloser(stream js.Value) io.ReadCloser {
 	}
 }
 
-// readerToReadableStream implements ReadableStream sourced from io.ReadCloser.
+// readerToReadableStream implements ReadableStream sourced from io.Reader.
 //   - ReadableStream: https://developer.mozilla.org/docs/Web/API/ReadableStream
 //   - This implementation is based on: https://deno.land/std@0.139.0/streams/conversion.ts#L230
 type readerToReadableStream struct {
 	initialized bool
-	reader      io.ReadCloser
+	reader      io.Reader
 	chunkBuf    []byte
 }
 
@@ -135,14 +135,14 @@ func (rs *readerToReadableStream) Pull(controller js.Value) error {
 	// When the call happens, `io.ErrClosedPipe` should be ignored.
 	if err == io.EOF || err == io.ErrClosedPipe {
 		controller.Call("close")
-		if err := rs.reader.Close(); err != nil {
+		if err := rs.closeReader(); err != nil {
 			return err
 		}
 		return nil
 	}
 	if err != nil {
 		controller.Call("error", Error(err.Error()))
-		if err := rs.reader.Close(); err != nil {
+		if err := rs.closeReader(); err != nil {
 			return err
 		}
 		return err
@@ -153,14 +153,25 @@ func (rs *readerToReadableStream) Pull(controller js.Value) error {
 // Cancel implements ReadableStream's cancel method.
 //   - https://developer.mozilla.org/en-US/docs/Web/API/ReadableStream/ReadableStream#cancel
 func (rs *readerToReadableStream) Cancel() error {
-	return rs.reader.Close()
+	return rs.closeReader()
+}
+
+// closeReader closes the underlying reader if it implements io.Closer; a
+// plain io.Reader has nothing to close.
+func (rs *readerToReadableStream) closeReader() error {
+	if c, ok := rs.reader.(io.Closer); ok {
+		return c.Close()
+	}
+	return nil
 }
 
 // https://deno.land/std@0.139.0/streams/conversion.ts#L5
 const defaultChunkSize = 16_640
 
-// ConvertReaderToReadableStream converts io.ReadCloser to ReadableStream.
-func ConvertReaderToReadableStream(reader io.ReadCloser) js.Value {
+// ConvertReaderToReadableStream converts an io.Reader to a ReadableStream. If
+// reader also implements io.Closer (e.g. an io.ReadCloser), it is closed when
+// the stream is closed or canceled.
+func ConvertReaderToReadableStream(reader io.Reader) js.Value {
 	stream := &readerToReadableStream{
 		reader:   reader,
 		chunkBuf: make([]byte, defaultChunkSize),
@@ -174,6 +185,18 @@ func ConvertReaderToReadableStream(reader io.ReadCloser) js.Value {
 			reject := pArgs[1]
 			controller := args[0]
 			go func() {
+				// A panic that escapes stream.Pull must not be allowed to
+				// propagate out of this goroutine: an unrecovered panic
+				// terminates the whole wasm program without ever calling
+				// resolve/reject, leaving the JS side's Promise pending
+				// forever instead of surfacing the failure. Converting it
+				// into a rejection keeps the Promise contract intact and
+				// lets the JS caller observe the error.
+				defer func() {
+					if r := recover(); r != nil {
+						reject.Invoke(Errorf("panic in ReadableStream pull: %v", r))
+					}
+				}()
 				err := stream.Pull(controller)
 				if err != nil {
 					reject.Invoke(Error(err.Error()))
@@ -192,6 +215,14 @@ func ConvertReaderToReadableStream(reader io.ReadCloser) js.Value {
 			resolve := pArgs[0]
 			reject := pArgs[1]
 			go func() {
+				// See the matching comment in pull's executor above: without
+				// this, a panic in stream.Cancel would crash the wasm
+				// program instead of rejecting the Promise.
+				defer func() {
+					if r := recover(); r != nil {
+						reject.Invoke(Errorf("panic in ReadableStream cancel: %v", r))
+					}
+				}()
 				err := stream.Cancel()
 				if err != nil {
 					reject.Invoke(Error(err.Error()))
@@ -229,4 +260,38 @@ func ConvertReaderToFixedLengthStream(rc io.ReadCloser, size int64) js.Value {
 		}
 	}(stream.Get("writable").Call("getWriter"))
 	return stream.Get("readable")
+}
+
+// writableStreamToWriteCloser implements io.WriteCloser sourced from a
+// WritableStreamDefaultWriter.
+//   - WritableStreamDefaultWriter: https://developer.mozilla.org/docs/Web/API/WritableStreamDefaultWriter
+type writableStreamToWriteCloser struct {
+	writer js.Value
+}
+
+var _ io.WriteCloser = (*writableStreamToWriteCloser)(nil)
+
+// Write copies p into a new Uint8Array and awaits the writer's write() call.
+func (w *writableStreamToWriteCloser) Write(p []byte) (n int, err error) {
+	ua := NewUint8Array(len(p))
+	js.CopyBytesToJS(ua, p)
+	if _, err := AwaitPromise(w.writer.Call("write", ua)); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// Close awaits the writer's close() call, then releases its lock on the
+// stream.
+func (w *writableStreamToWriteCloser) Close() error {
+	_, err := AwaitPromise(w.writer.Call("close"))
+	w.writer.Call("releaseLock")
+	return err
+}
+
+// ConvertWritableStreamToWriteCloser converts a JS WritableStream to an
+// io.WriteCloser, via getWriter(): Write awaits write(Uint8Array), and Close
+// awaits close() before releasing the writer's lock.
+func ConvertWritableStreamToWriteCloser(stream js.Value) io.WriteCloser {
+	return &writableStreamToWriteCloser{writer: stream.Call("getWriter")}
 }

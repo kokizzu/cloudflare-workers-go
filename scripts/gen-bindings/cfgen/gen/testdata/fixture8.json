@@ -1,0 +1,189 @@
+{
+  "source": {
+    "package": "@cloudflare/workers-types",
+    "version": "0.0.0-fixture8",
+    "entry": "index.d.ts"
+  },
+  "decls": [
+    {
+      "kind": "interface",
+      "name": "Txn",
+      "module": "",
+      "doc": "",
+      "typeParams": [],
+      "extends": [],
+      "members": [
+        {
+          "kind": "method",
+          "name": "put",
+          "doc": "",
+          "params": [
+            {
+              "name": "key",
+              "type": {
+                "k": "prim",
+                "name": "string"
+              },
+              "optional": false,
+              "rest": false
+            },
+            {
+              "name": "value",
+              "type": {
+                "k": "prim",
+                "name": "string"
+              },
+              "optional": false,
+              "rest": false
+            }
+          ],
+          "returns": {
+            "k": "prim",
+            "name": "void"
+          },
+          "typeParams": []
+        }
+      ]
+    },
+    {
+      "kind": "interface",
+      "name": "Store",
+      "module": "",
+      "doc": "Store exercises tmp/06-codegen-spec.md 5.1 item 5: a callback-shaped method parameter becomes a dedicated Go func(...) (U, error) signature, wrapped via jsrt.AsyncFunc.",
+      "typeParams": [],
+      "extends": [],
+      "members": [
+        {
+          "kind": "method",
+          "name": "transaction",
+          "doc": "",
+          "params": [
+            {
+              "name": "closure",
+              "type": {
+                "k": "function",
+                "params": [
+                  {
+                    "name": "txn",
+                    "type": {
+                      "k": "ref",
+                      "name": "Txn",
+                      "args": []
+                    },
+                    "optional": false,
+                    "rest": false
+                  }
+                ],
+                "returns": {
+                  "k": "ref",
+                  "name": "Promise",
+                  "args": [
+                    {
+                      "k": "typeParam",
+                      "name": "T"
+                    }
+                  ]
+                }
+              },
+              "optional": false,
+              "rest": false
+            }
+          ],
+          "returns": {
+            "k": "ref",
+            "name": "Promise",
+            "args": [
+              {
+                "k": "typeParam",
+                "name": "T"
+              }
+            ]
+          },
+          "typeParams": [
+            {
+              "name": "T"
+            }
+          ]
+        },
+        {
+          "kind": "method",
+          "name": "blockConcurrencyWhile",
+          "doc": "",
+          "params": [
+            {
+              "name": "callback",
+              "type": {
+                "k": "function",
+                "params": [],
+                "returns": {
+                  "k": "ref",
+                  "name": "Promise",
+                  "args": [
+                    {
+                      "k": "typeParam",
+                      "name": "T"
+                    }
+                  ]
+                }
+              },
+              "optional": false,
+              "rest": false
+            }
+          ],
+          "returns": {
+            "k": "ref",
+            "name": "Promise",
+            "args": [
+              {
+                "k": "typeParam",
+                "name": "T"
+              }
+            ]
+          },
+          "typeParams": [
+            {
+              "name": "T"
+            }
+          ]
+        },
+        {
+          "kind": "method",
+          "name": "runVoid",
+          "doc": "",
+          "params": [
+            {
+              "name": "callback",
+              "type": {
+                "k": "function",
+                "params": [],
+                "returns": {
+                  "k": "ref",
+                  "name": "Promise",
+                  "args": [
+                    {
+                      "k": "prim",
+                      "name": "void"
+                    }
+                  ]
+                }
+              },
+              "optional": false,
+              "rest": false
+            }
+          ],
+          "returns": {
+            "k": "ref",
+            "name": "Promise",
+            "args": [
+              {
+                "k": "prim",
+                "name": "void"
+              }
+            ]
+          },
+          "typeParams": []
+        }
+      ]
+    }
+  ]
+}

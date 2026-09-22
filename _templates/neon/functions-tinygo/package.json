@@ -1,0 +1,14 @@
+{
+  "name": "<TBD>",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "build": "go run github.com/syumai/workers-go/cmd/workers-assets-gen -runtime=neon && tinygo build -o ./build/app.wasm -target wasm -no-debug ./...",
+    "dev": "npm run build && neon dev",
+    "deploy": "npm run build && neon deploy"
+  },
+  "devDependencies": {
+    "@neon/config": "^1.7.2",
+    "neon": "^5.0.0"
+  }
+}

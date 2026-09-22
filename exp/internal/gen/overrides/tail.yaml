@@ -1,0 +1,67 @@
+package: tail
+doc: |
+  Package tail provides the data types delivered to a Worker's
+  tail(events, env, ctx) handler, i.e. a Tail Worker consuming another
+  Worker's execution traces via that Worker's `tail_consumers` config
+  (https://developers.cloudflare.com/workers/observability/logs/tail-workers/).
+  TraceItem and its nested types are generated here; tail.go's hand-written
+  Handle registers the Worker's own tail(events, env, ctx) export (added to
+  cmd/workers-assets-gen/assets/common/worker.mjs) the same way
+  cloudflare/queues.Consume registers queue and exp/cloudflare/email.Handle
+  registers email.
+
+  TraceItem.event is a 10-way union (TraceItemFetchEventInfo |
+  TraceItemJsRpcEventInfo | TraceItemConnectEventInfo |
+  TraceItemScheduledEventInfo | TraceItemAlarmEventInfo |
+  TraceItemQueueEventInfo | TraceItemEmailEventInfo |
+  TraceItemTailEventInfo | TraceItemCustomEventInfo |
+  TraceItemHibernatableWebSocketEventInfo | null). Left unconfigured, cfgen's
+  union-of-data-shapes rule would merge all ten into one lossy synthesized
+  struct instead of preserving the discriminated-union shape, so it's
+  overridden to js.Value here; tail.go adds a hand-written EventKind()
+  (inferred from which of the branches' distinguishing properties are
+  present — TraceItemConnectEventInfo and TraceItemCustomEventInfo carry no
+  properties of their own, so they can't be told apart this way and both
+  fall back to EventKind() == "") plus typed accessors (FetchEvent(),
+  ScheduledEvent(), ...) for every branch that can be identified.
+
+  TraceItem.eventTimestamp is `number | null` (a Unix ms timestamp). cfgen's
+  "types:" overrides support a "*int" pointer spelling but not "*float64"
+  (see scripts/gen-bindings/cfgen/gen/types.go's namedTypeConv), and
+  TraceItem is a plain data struct with no retained js.Value to fall back to
+  post-decode, so the null/absent case can't be distinguished from a literal
+  0. It's generated as plain float64 (types: override below, matching what
+  cfgen would already infer by default — spelled out to document the
+  choice); tail.go's EventTime() treats an EventTimestamp of exactly 0 as
+  absent, which is the best available approximation given the above.
+
+  TraceLogErrorInfo (referenced by TraceLog.errorInfo) is included even
+  though it isn't itself part of the TraceItem event-info family, since it's
+  a plain data type with no reason to fall back to js.Value.
+include:
+  - TraceItem
+  - TraceLog
+  - TraceLogErrorInfo
+  - TraceException
+  - TraceDiagnosticChannelEvent
+  - ScriptVersion
+  - TracePreviewInfo
+  - TraceItemFetchEventInfo
+  - TraceItemFetchEventInfoRequest
+  - TraceItemFetchEventInfoResponse
+  - TraceItemJsRpcEventInfo
+  - TraceItemConnectEventInfo
+  - TraceItemScheduledEventInfo
+  - TraceItemAlarmEventInfo
+  - TraceItemQueueEventInfo
+  - TraceItemEmailEventInfo
+  - TraceItemTailEventInfo
+  - TraceItemTailEventInfoTailItem
+  - TraceItemCustomEventInfo
+  - TraceItemHibernatableWebSocketEventInfo
+  - TraceItemHibernatableWebSocketEventInfoMessage
+  - TraceItemHibernatableWebSocketEventInfoClose
+  - TraceItemHibernatableWebSocketEventInfoError
+types:
+  TraceItem.event: "js.Value"
+  TraceItem.eventTimestamp: "float64"
