@@ -41,11 +41,18 @@ func runHonoMiddleware(nextFnObj js.Value) error {
 		return fmt.Errorf("ServeMiddleware must be called before runHonoMiddleware.")
 	}
 	c := newContext(jsutil.RuntimeContext.Get("ctx"))
+	var nextErr error
 	next := func() {
-		jsutil.AwaitPromise(nextFnObj.Invoke())
+		// A rejected next() is captured rather than dropped so that the
+		// Middleware signature stays compatible; runHonoMiddleware
+		// returns the error after the middleware finishes, which rejects
+		// the Promise returned to the JS side.
+		if _, err := jsutil.AwaitPromise(nextFnObj.Invoke()); err != nil {
+			nextErr = err
+		}
 	}
 	middleware(c, next)
-	return nil
+	return nextErr
 }
 
 //go:wasmimport workers ready

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/syumai/workers-go/internal/jstest"
+	"github.com/syumai/workers-go/internal/jsutil"
 )
 
 // TestRunHonoMiddleware_callsNext verifies that runHonoMiddleware
@@ -89,20 +90,32 @@ func TestRunHonoMiddleware_setHeaderStatusBody(t *testing.T) {
 	}
 }
 
-// TestRunHonoMiddleware_nextRejects documents a known issue found while
-// writing this test: middleware.go's next function
-// (`jsutil.AwaitPromise(nextFnObj.Invoke())`) discards the error that
-// AwaitPromise returns when the JS-side next() Promise rejects. So a
-// middleware has no way to observe that next() failed, and
-// runHonoMiddleware's own Promise still resolves instead of rejecting -
-// unlike what the binding contract would suggest (the JS next() argument
-// models Hono's own middleware chaining, where a downstream failure should
-// be observable).
-//
-// Confirmed empirically with a throwaway probe test: a JS next callback
-// that returns a rejected Promise, invoked the same way as
-// TestRunHonoMiddleware_callsNext, still resulted in the middleware running
-// past next() and the outer Promise resolving successfully.
+// TestRunHonoMiddleware_nextRejects verifies that a rejected JS-side
+// next() is propagated: the Middleware signature keeps next as func(),
+// so runHonoMiddleware captures the error and returns it after the
+// middleware finishes, rejecting the Promise returned to the JS caller.
 func TestRunHonoMiddleware_nextRejects(t *testing.T) {
-	t.Skip("known issue: middleware.go's next() discards the error from jsutil.AwaitPromise(nextFnObj.Invoke()), so a middleware can never observe (nor propagate) a rejected next() - runHonoMiddleware's Promise resolves instead of rejecting")
+	reqObj := jstest.Request(t, "GET", "http://example.com/", nil, nil)
+	fake := newFakeHonoContext(t, reqObj)
+	jstest.SetRuntimeContext(t, jstest.RuntimeContext{Ctx: fake.Value()})
+
+	var ranPastNext bool
+	middleware = func(c *Context, next func()) {
+		next()
+		// The middleware itself continues running after a rejected
+		// next(); the rejection is reported by runHonoMiddleware.
+		ranPastNext = true
+	}
+	t.Cleanup(func() { middleware = nil })
+
+	nextFn := jstest.Func(t, func(_ js.Value, _ []js.Value) any {
+		return jstest.Rejected("downstream failed")
+	})
+	p := jstest.Binding(t, "runHonoMiddleware").Invoke(nextFn)
+	if _, err := jsutil.AwaitPromise(p); err == nil {
+		t.Fatal("runHonoMiddleware's Promise resolved, want a rejection after next() rejected")
+	}
+	if !ranPastNext {
+		t.Error("middleware did not run past next(); middleware body should still complete before the rejection is reported")
+	}
 }

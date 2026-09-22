@@ -86,7 +86,6 @@ Search for `t.Skip("known issue` to find them. At the time of writing:
 - `internal/jsutil`: a panic inside the function passed to `TryCatch` hangs
   the process.
 - `cloudflare/cron`: `scheduledTime` loses milliseconds.
-- `exp/hono`: a rejected `next()` is swallowed.
 - `cloudflare.WaitUntil`: resuming a goroutine from a timer inside the
   `waitUntil` callback fails with "Go program has already exited" under
   workerd (E2E `waituntil/runs_after_response`).
