@@ -239,14 +239,6 @@ func TestAwaitPromise(t *testing.T) {
 	})
 
 	t.Run("rejected_with_string", func(t *testing.T) {
-		// known issue: AwaitPromise's catch handler calls result.Call("toString"),
-		// which syscall/js only allows on object values. When a Promise
-		// rejects with a plain (non-Error) value such as a string, that
-		// call panics instead of returning an error, which crashes the
-		// whole test binary (not just this subtest). Skip before ever
-		// constructing that promise.
-		t.Skip("known issue: AwaitPromise panics (not just errors) on a non-object rejection value")
-
 		_, err := AwaitPromise(jsPromise(t, nil, "plain string rejection"))
 		if err == nil {
 			t.Fatalf("AwaitPromise() error = nil, want non-nil")

@@ -59,7 +59,7 @@ func (sr *readableStreamToReadCloser) Read(p []byte) (n int, err error) {
 		catch = js.FuncOf(func(_ js.Value, args []js.Value) any {
 			defer catch.Release()
 			result := args[0]
-			errCh <- fmt.Errorf("JavaScript error on read: %s", result.Call("toString").String())
+			errCh <- fmt.Errorf("JavaScript error on read: %s", errorString(result))
 			return js.Undefined()
 		})
 		promise.Call("then", then).Call("catch", catch)

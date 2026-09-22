@@ -69,7 +69,7 @@ func AwaitPromise(promiseVal js.Value) (js.Value, error) {
 	catch = js.FuncOf(func(_ js.Value, args []js.Value) any {
 		defer catch.Release()
 		result := args[0]
-		errCh <- fmt.Errorf("failed on promise: %s", result.Call("toString").String())
+		errCh <- fmt.Errorf("failed on promise: %s", errorString(result))
 		return js.Undefined()
 	})
 	promiseVal.Call("then", then).Call("catch", catch)
@@ -79,6 +79,17 @@ func AwaitPromise(promiseVal js.Value) (js.Value, error) {
 	case err := <-errCh:
 		return js.Value{}, err
 	}
+}
+
+// errorString stringifies a JavaScript rejection/error value. Rejections
+// are usually Error objects, but a Promise can reject with any value and
+// Value.Call panics on non-object values, so primitives are stringified
+// through the String() function instead of a toString method call.
+func errorString(v js.Value) string {
+	if v.Type() == js.TypeObject {
+		return v.Call("toString").String()
+	}
+	return js.Global().Get("String").Invoke(v).String()
 }
 
 // StrRecordToMap converts JavaScript side's Record<string, string> into map[string]string.
