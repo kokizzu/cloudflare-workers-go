@@ -6,9 +6,13 @@
     "dev": "blume dev",
     "build": "blume build",
     "preview": "blume preview",
-    "check": "blume check"
+    "check": "blume check",
+    "deploy": "wrangler deploy"
   },
   "dependencies": {
     "blume": "^1.7.3"
+  },
+  "devDependencies": {
+    "wrangler": "^4.133.0"
   }
 }

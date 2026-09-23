@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "workers-go-docs",
+  "compatibility_date": "2026-09-23",
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "workers-go.syumai.dev",
+      "custom_domain": true
+    }
+  ],
+  "assets": {
+    "directory": "./dist"
+  }
+}

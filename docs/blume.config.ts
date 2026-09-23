@@ -13,7 +13,6 @@ export default defineConfig({
     root: "content",
   },
   deployment: {
-    site: "https://syumai.github.io",
-    base: "/workers-go",
+    site: "https://workers-go.syumai.dev",
   },
 });
