@@ -1,0 +1,270 @@
+---
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import Icon from "blume/components/Icon.astro";
+import PageLayout from "blume/components/layout/PageLayout.astro";
+import { withBase } from "blume/components/islands/base-path.ts";
+import data from "blume:data";
+
+const { config } = data;
+const repoUrl = config.repoUrl ?? "https://github.com/syumai/workers-go";
+
+const platforms = [
+  {
+    description:
+      "Serve http.Handler on Workers and Pages Functions, with KV, R2, D1, Queues, Cron, Durable Objects, and more.",
+    href: "/cloudflare",
+    icon: "cloud",
+    title: "Cloudflare Workers",
+  },
+  {
+    description:
+      "Serve HTTP from a Go Wasm binary running inside a browser tab with the browser template.",
+    href: "/browser",
+    icon: "globe",
+    title: "Browser",
+  },
+  {
+    description:
+      "Run the same http.Handler on Neon's serverless functions platform.",
+    href: "/neon",
+    icon: "database",
+    title: "Neon Functions",
+  },
+  {
+    description: "Serve http.Handler via Deno.serve on Deno and Deno Deploy.",
+    href: "/deno",
+    icon: "server",
+    title: "Deno / Deno Deploy",
+  },
+];
+
+const features = [
+  "http.Handler, unchanged",
+  "KV, R2, D1, and the Cache API",
+  "Queues, Cron, and FetchEvent",
+  "Durable Objects, WebSocket, RPC, and Workflows",
+  "TCP Sockets and Service Bindings",
+  "Workers AI, Vectorize, and Images",
+];
+
+const code = `package main
+
+import (
+	"fmt"
+	"net/http"
+
+	"github.com/syumai/workers-go"
+)
+
+func main() {
+	http.HandleFunc("/hello", func(w http.ResponseWriter, req *http.Request) {
+		fmt.Fprintf(w, "Hello, %s!", req.URL.Query().Get("name"))
+	})
+	workers.Serve(nil) // if nil is given, http.DefaultServeMux is used
+}
+`;
+---
+
+<PageLayout
+  analytics={config.analytics}
+  banner={config.banner}
+  favicon={config.favicon}
+  fontCssVars={data.fontCssVars}
+  logo={config.logo}
+  navigation={data.navigation}
+  ogEnabled={config.og.enabled}
+  page={{
+    description: config.description,
+    route: "/",
+    title: `${config.title} — ${config.description}`,
+  }}
+  searchEnabled={config.search.enabled}
+  site={{ title: config.title, description: config.description }}
+  siteUrl={config.site}
+  structuredDataEnabled={config.structuredData}
+  ui={data.ui}
+  x={config.x}
+>
+  <section
+    class="relative overflow-hidden border-border border-b px-6 py-24 text-center sm:py-32"
+  >
+    <div
+      aria-hidden="true"
+      class="pointer-events-none absolute inset-0 bg-[radial-gradient(45rem_20rem_at_50%_-5rem,var(--blume-muted),transparent)]"
+    >
+    </div>
+    <div class="relative mx-auto max-w-3xl">
+      <p
+        class="mb-6 inline-flex items-center gap-2 rounded-full border border-border bg-muted px-3 py-1 font-medium text-muted-foreground text-xs"
+      >
+        <Icon name="flask-conical" size={12} />
+        Experimental — APIs may change between releases
+      </p>
+      <h1
+        class="font-display font-semibold text-4xl text-foreground tracking-tight sm:text-6xl"
+      >
+        Run Go on <span class="text-muted-foreground">Cloudflare Workers</span>,
+        and beyond
+      </h1>
+      <p
+        class="mx-auto mt-6 max-w-2xl text-lg text-muted-foreground leading-relaxed"
+      >
+        Your Go code compiles to WebAssembly, and workers-go bridges the
+        JavaScript runtime APIs to idiomatic Go types.
+      </p>
+      <div class="mt-10 flex flex-wrap items-center justify-center gap-3">
+        <a
+          class="inline-flex items-center gap-2 rounded-blume bg-action px-5 py-2.5 font-medium text-action-foreground text-sm transition-opacity hover:opacity-90"
+          href={withBase("/quickstart")}
+        >
+          <Icon name="rocket" size={16} />
+          Get started
+        </a>
+        <a
+          class="inline-flex items-center gap-2 rounded-blume border border-border bg-background px-5 py-2.5 font-medium text-foreground text-sm transition-colors hover:bg-muted"
+          href={withBase("/introduction")}
+        >
+          <Icon name="book-open" size={16} />
+          Read the docs
+        </a>
+        <a
+          class="inline-flex items-center gap-2 rounded-blume border border-border bg-background px-5 py-2.5 font-medium text-foreground text-sm transition-colors hover:bg-muted"
+          href={repoUrl}
+          rel="noopener"
+          target="_blank"
+        >
+          <Icon name="github" size={16} />
+          GitHub
+        </a>
+      </div>
+      <div
+        class="mx-auto mt-8 inline-flex items-center gap-3 rounded-blume border border-border bg-code px-4 py-2.5"
+      >
+        <span class="font-mono text-muted-foreground text-sm">$</span>
+        <code class="font-mono text-foreground text-sm"
+          >go get github.com/syumai/workers-go</code
+        >
+      </div>
+    </div>
+  </section>
+
+  <section class="mx-auto max-w-5xl px-6 py-20">
+    <h2
+      class="text-center font-display font-semibold text-2xl text-foreground tracking-tight sm:text-3xl"
+    >
+      One handler, every runtime
+    </h2>
+    <p class="mx-auto mt-3 max-w-2xl text-center text-muted-foreground">
+      Write a plain <code>http.Handler</code>. workers-go serves it on
+      Cloudflare Workers, in the browser, on Neon Functions, and on Deno.
+    </p>
+    <div class="mt-10 grid gap-4 sm:grid-cols-2">
+      {
+        platforms.map((platform) => (
+          <a
+            class="group rounded-blume border border-border bg-background p-6 transition-colors hover:bg-muted"
+            href={withBase(platform.href)}
+          >
+            <div class="flex items-center gap-3">
+              <span class="flex size-9 items-center justify-center rounded-blume bg-muted text-foreground transition-colors group-hover:bg-background">
+                <Icon name={platform.icon} size={18} />
+              </span>
+              <h3 class="font-semibold text-foreground">{platform.title}</h3>
+            </div>
+            <p class="mt-3 text-muted-foreground text-sm leading-relaxed">
+              {platform.description}
+            </p>
+          </a>
+        ))
+      }
+    </div>
+  </section>
+
+  <section class="border-border border-t bg-muted/40 px-6 py-20">
+    <div
+      class="mx-auto grid max-w-5xl items-center gap-10 lg:grid-cols-[1.2fr_1fr]"
+    >
+      <div>
+        <CodeBlock code={code} lang="go" title="main.go" />
+      </div>
+      <div>
+        <h2
+          class="font-display font-semibold text-2xl text-foreground tracking-tight sm:text-3xl"
+        >
+          The Workers platform, from Go
+        </h2>
+        <p class="mt-3 text-muted-foreground">
+          Bindings and triggers for the runtime APIs — stable where it matters,
+          experimental where the platform is still moving.
+        </p>
+        <ul class="mt-6 space-y-2.5">
+          {
+            features.map((feature) => (
+              <li class="flex items-start gap-2.5 text-foreground text-sm">
+                <Icon
+                  class="mt-0.5 shrink-0 text-muted-foreground"
+                  name="check"
+                  size={16}
+                />
+                <span>{feature}</span>
+              </li>
+            ))
+          }
+        </ul>
+        <a
+          class="mt-6 inline-flex items-center gap-1.5 font-medium text-foreground text-sm hover:underline"
+          href={withBase("/cloudflare")}
+        >
+          Explore the Cloudflare APIs
+          <Icon name="arrow-right" size={14} />
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <section class="px-6 py-20 text-center">
+    <div class="mx-auto max-w-2xl">
+      <h2
+        class="font-display font-semibold text-2xl text-foreground tracking-tight sm:text-3xl"
+      >
+        Deploy your first worker in minutes
+      </h2>
+      <p class="mt-3 text-muted-foreground">
+        Scaffold a project from the Cloudflare template, write an http.Handler,
+        and ship it.
+      </p>
+      <a
+        class="mt-8 inline-flex items-center gap-2 rounded-blume bg-action px-5 py-2.5 font-medium text-action-foreground text-sm transition-opacity hover:opacity-90"
+        href={withBase("/quickstart")}
+      >
+        <Icon name="rocket" size={16} />
+        Quickstart
+      </a>
+    </div>
+  </section>
+
+  <footer
+    class="border-border border-t px-6 py-10"
+    slot="footer"
+  >
+    <div
+      class="mx-auto flex max-w-5xl flex-col items-center justify-between gap-4 text-muted-foreground text-sm sm:flex-row"
+    >
+      <p>{config.title}</p>
+      <nav class="flex items-center gap-5">
+        <a class="hover:text-foreground" href={withBase("/introduction")}
+          >Introduction</a
+        >
+        <a class="hover:text-foreground" href={withBase("/quickstart")}
+          >Quickstart</a
+        >
+        <a
+          class="hover:text-foreground"
+          href={repoUrl}
+          rel="noopener"
+          target="_blank">GitHub</a
+        >
+      </nav>
+    </div>
+  </footer>
+</PageLayout>
