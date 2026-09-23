@@ -2,13 +2,21 @@
 // namespace) from `deno doc --json` output into the exp/deno package.
 //
 // Usage:
-//   deno run --allow-run=deno,gofmt --allow-read --allow-write scripts/gen-deno/main.ts [options]
+//   node src/index.ts [options]
 //
 // Options:
-//   --config <path>  gen.json path (default: gen.json next to this script)
-//   --types <path>   deno.d.ts path (default: run `deno types` into a temp file)
-//   --doc <path>     deno doc JSON path (default: run `deno doc --json`)
+//   --config <path>  gen.json path (default: gen.json in this package)
+//   --doc <path>     deno doc JSON path (default: deno-doc.json snapshot in
+//                    this package; refresh it with `pnpm run snapshot`,
+//                    which requires the deno binary)
+//   --types <path>   deno.d.ts path; when given, `deno doc --json` is invoked
+//                    on it (requires the deno binary)
 //   --out <dir>      output directory (default: <repo>/exp/deno)
+
+import { execFileSync } from "node:child_process";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 type Doc = any;
 
@@ -31,19 +39,12 @@ function parseArgs(argv: string[]): Record<string, string> {
   return args;
 }
 
-async function capture(cmd: string[]): Promise<string> {
-  const c = new Deno.Command(cmd[0], {
-    args: cmd.slice(1),
-    stdout: "piped",
-    stderr: "piped",
+function capture(cmd: string[]): string {
+  return execFileSync(cmd[0], cmd.slice(1), {
+    encoding: "utf8",
+    // `deno doc --json` output is several MB.
+    maxBuffer: 64 * 1024 * 1024,
   });
-  const o = await c.output();
-  if (!o.success) {
-    throw new Error(
-      `${cmd.join(" ")} failed: ${new TextDecoder().decode(o.stderr)}`,
-    );
-  }
-  return new TextDecoder().decode(o.stdout);
 }
 
 // ---------------- naming ----------------
@@ -181,24 +182,24 @@ function zeroOf(go: string): string {
 
 // ---------------- doc model ----------------
 
-const cliArgs = parseArgs(Deno.args);
-const scriptDir = new URL(".", import.meta.url).pathname;
-const repoRoot = new URL("../../", import.meta.url).pathname;
-const configPath = cliArgs.config ?? `${scriptDir}gen.json`;
-const outDir = cliArgs.out ?? `${repoRoot}exp/deno`;
+const cliArgs = parseArgs(process.argv.slice(2));
+const pkgDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = path.resolve(pkgDir, "../..");
+const configPath = cliArgs.config ?? path.join(pkgDir, "gen.json");
+const outDir = cliArgs.out ?? path.join(repoRoot, "exp/deno");
 
 async function loadDocText(): Promise<string> {
-  if (cliArgs.doc) return await Deno.readTextFile(cliArgs.doc);
-  let typesPath = cliArgs.types;
-  if (!typesPath) {
-    typesPath = await Deno.makeTempFile({ suffix: ".d.ts" });
-    await Deno.writeTextFile(typesPath, await capture(["deno", "types"]));
+  if (cliArgs.doc) return await readFile(cliArgs.doc, "utf8");
+  if (cliArgs.types) {
+    // Requires the deno binary; normally the committed snapshot is used
+    // instead (see `pnpm run snapshot`).
+    return capture(["deno", "doc", "--json", cliArgs.types]);
   }
-  return await capture(["deno", "doc", "--json", typesPath]);
+  return await readFile(path.join(pkgDir, "deno-doc.json"), "utf8");
 }
 
 const doc: Doc = JSON.parse(await loadDocText());
-const config = JSON.parse(await Deno.readTextFile(configPath));
+const config = JSON.parse(await readFile(configPath, "utf8"));
 const nsNode = doc.nodes.find(
   (n: Doc) => n.kind === "namespace" && n.name === "Deno",
 );
@@ -1334,7 +1335,7 @@ function fileText(lines: string[]): string {
   return HEADER + imports + "\n" + body + "\n";
 }
 
-await Deno.mkdir(outDir, { recursive: true });
+await mkdir(outDir, { recursive: true });
 const files: [string, string[]][] = [
   ["types.gen.go", typeOut],
   ["classes.gen.go", classOut],
@@ -1343,9 +1344,9 @@ const files: [string, string[]][] = [
 ];
 const written: string[] = [];
 for (const [name, lines] of files) {
-  const p = `${outDir}/${name}`;
-  await Deno.writeTextFile(p, fileText(lines));
+  const p = path.join(outDir, name);
+  await writeFile(p, fileText(lines));
   written.push(p);
 }
-await capture(["gofmt", "-w", ...written]);
+capture(["gofmt", "-w", ...written]);
 console.log(`generated: ${written.join(", ")}`);

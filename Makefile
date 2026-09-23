@@ -22,4 +22,10 @@ gen-wasm-exec:
 
 .PHONY: gen-deno
 gen-deno:
-	deno run --allow-run=deno,gofmt --allow-read --allow-write --allow-env scripts/gen-deno/main.ts
+	cd scripts/gen-deno && pnpm run gen
+
+# Refreshes the Deno API snapshot (scripts/gen-deno/deno-doc.json) consumed
+# by gen-deno. Requires the deno binary.
+.PHONY: gen-deno-snapshot
+gen-deno-snapshot:
+	cd scripts/gen-deno && pnpm run snapshot
