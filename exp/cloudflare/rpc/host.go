@@ -20,7 +20,7 @@ import (
 // and its own fetch() trigger, mirroring exp/cloudflare/durableobjects/
 // host.go's and exp/cloudflare/workflows/host.go's approach: worker.mjs's
 // GoWorkerEntrypoint#_bind sets up a "entrypoint: {className}" runtime
-// context entry (cmd/workers-assets-gen/assets/common/worker.mjs), and each
+// context entry (cmd/workers-assets-gen/assets/runtimes/cloudflare/worker.mjs), and each
 // generated subclass method (one per name in workers-assets-gen's
 // -entrypoints=Name:method1,method2 flag) forwards to handleRPC, plus a
 // fetch method every generated subclass has that forwards to
@@ -198,7 +198,7 @@ func jsArrayToSlice(v js.Value) []js.Value {
 // currentClassName reads entrypoint.className off the runtime context —
 // set by worker.mjs's GoWorkerEntrypoint#_bind for every RPC call or
 // fetch() trigger dispatched to a WorkerEntrypoint instance (see
-// cmd/workers-assets-gen/assets/common/worker.mjs).
+// cmd/workers-assets-gen/assets/runtimes/cloudflare/worker.mjs).
 func currentClassName() (string, error) {
 	ep, err := jsrt.RuntimeContextValue("entrypoint")
 	if err != nil {

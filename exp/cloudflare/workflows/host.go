@@ -23,7 +23,7 @@ import (
 // so there is no instance-memoization equivalent to durableobjects.instance()
 // here), dispatched through worker.mjs's GoWorkflowEntrypoint#bind and the
 // "workflow" runtime context entry it sets up
-// (cmd/workers-assets-gen/assets/common/worker.mjs).
+// (cmd/workers-assets-gen/assets/runtimes/cloudflare/worker.mjs).
 
 // Event is the WorkflowEvent<T> passed to a Runner. Payload is the raw,
 // structured-clonable JS value; use PayloadJSON to decode it into a Go
@@ -391,7 +391,7 @@ func init() {
 // currentClassName reads workflow.className off the runtime context — set
 // by worker.mjs's GoWorkflowEntrypoint#bind for every run() trigger
 // dispatched to a Workflow instance (see
-// cmd/workers-assets-gen/assets/common/worker.mjs).
+// cmd/workers-assets-gen/assets/runtimes/cloudflare/worker.mjs).
 func currentClassName() (string, error) {
 	wf, err := jsrt.RuntimeContextValue("workflow")
 	if err != nil {

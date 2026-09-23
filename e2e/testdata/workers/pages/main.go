@@ -6,7 +6,7 @@
 // "/api" prefix because Pages Functions forwards the full incoming
 // request, including the path segment functions/api/[[routes]].mjs
 // matched on (see functions/api/[[routes]].mjs and
-// cmd/workers-assets-gen/assets/common/worker.mjs's onRequest).
+// cmd/workers-assets-gen/assets/runtimes/cloudflare/worker.mjs's onRequest).
 package main
 
 import (

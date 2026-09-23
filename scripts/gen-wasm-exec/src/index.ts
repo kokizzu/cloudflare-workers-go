@@ -59,10 +59,10 @@ async function main() {
 		throw new Error("--tinygo <version> is required (e.g. --tinygo 0.41.1)");
 
 	const here = path.dirname(fileURLToPath(import.meta.url));
-	// here is scripts/gen-wasm-exec/src ; default output is repo's cmd/workers-assets-gen/assets
+	// here is scripts/gen-wasm-exec/src ; default output is repo's cmd/workers-assets-gen/assets/core
 	const outDir = args.out
 		? path.resolve(args.out)
-		: path.resolve(here, "../../../cmd/workers-assets-gen/assets");
+		: path.resolve(here, "../../../cmd/workers-assets-gen/assets/core");
 	// default test-runner output is repo's testdata/wasm
 	const testOutDir = args.testOut
 		? path.resolve(args.testOut)

@@ -1,3 +1,4 @@
+core.mjs
 runtime.mjs
 wasm_exec.js
 worker.mjs

@@ -26,7 +26,7 @@ import (
 //
 // Getting at the real class is the same problem cloudflare/sockets.Connect
 // solves for connect(): the runtime shims under
-// cmd/workers-assets-gen/assets/runtime/{cloudflare,browser}.mjs import it
+// cmd/workers-assets-gen/assets/runtimes/cloudflare/runtime.mjs import it
 // from "cloudflare:email" and add it to the object createRuntimeContext
 // returns, and NewEmailMessage/NewEmailMessageString read it back out via
 // jsrt.RuntimeContextValue.

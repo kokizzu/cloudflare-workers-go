@@ -158,7 +158,7 @@ func instance() (Object, error) {
 
 // currentClassName reads durableObject.className off the runtime context —
 // set by worker.mjs's GoDurableObject#bind for every trigger dispatched to
-// a Durable Object instance (see cmd/workers-assets-gen/assets/common/worker.mjs).
+// a Durable Object instance (see cmd/workers-assets-gen/assets/runtimes/cloudflare/worker.mjs).
 func currentClassName() (string, error) {
 	do, err := jsrt.RuntimeContextValue("durableObject")
 	if err != nil {

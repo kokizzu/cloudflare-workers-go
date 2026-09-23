@@ -84,7 +84,7 @@ func AsyncFunc(handler func(args []js.Value) (js.Value, error)) js.Func {
 
 // RuntimeContextValue reads key directly off the runtime context object
 // passed in from the JS side (env/ctx/binding, plus whatever a runtime
-// shim under cmd/workers-assets-gen/assets/runtime/*.mjs adds to
+// shim under cmd/workers-assets-gen/assets/runtimes/*/runtime.mjs adds to
 // createRuntimeContext's return value, e.g. "connect" or "EmailMessage").
 // It returns an error if the value is undefined — either because the
 // current runtime shim (e.g. browser.mjs) doesn't provide it, or because

@@ -90,10 +90,10 @@ exp/cloudflare/<pkg>/<pkg>.go                                (hand-written, only
   `EmailMessage` *interface* stub with `from`/`to` getters is), so it's
   fetched from the runtime context the same way `cloudflare/sockets.Connect`
   fetches `connect()` — see `email.yaml`'s doc comment and
-  `cmd/workers-assets-gen/assets/runtime/{cloudflare,browser}.mjs`'s
+  `cmd/workers-assets-gen/assets/runtimes/cloudflare/runtime.mjs`'s
   `EmailMessage` entry. `email.Handle` registers the Worker's own
   `email(message, env, ctx)` export (added to
-  `cmd/workers-assets-gen/assets/common/worker.mjs`) the same way
+  `cmd/workers-assets-gen/assets/runtimes/cloudflare/worker.mjs`) the same way
   `cloudflare/queues.Consume` registers `queue`.
 * `websocket` (`Upgrade`/`Conn`, `UpgradeHibernating`/`HibernatingConn`) has
   no `z<pkg>_gen.go` at all — it is entirely hand-written.

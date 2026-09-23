@@ -29,7 +29,7 @@ regenerate it. Do not hand-edit these files; edit the generator instead.
     `Ready()`. Each call increments `context.readyCount`, so tests can assert
     on how many times it fired.
   - it polyfills `globalThis.tryCatch` with the same definition as
-    `cmd/workers-assets-gen/assets/common/worker.mjs`, since Node has no such
+    `cmd/workers-assets-gen/assets/core/core.mjs`, since Node has no such
     global and `internal/jsutil.TryCatch` / `cloudflare/sockets.Connect` rely
     on it.
 - `go_js_wasm_exec` — Go's `lib/wasm/go_js_wasm_exec`, copied verbatim and

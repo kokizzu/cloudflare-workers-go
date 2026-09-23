@@ -16,24 +16,6 @@ export async function loadModule() {
   return await modPromise;
 }
 
-// Deno has no Workflows/RPC equivalent, so these are dummies
-// (mirroring runtime/neon.mjs) just so worker.mjs's static import of
-// WorkflowEntrypointBase/WorkerEntrypointBase (for GoWorkflowEntrypoint,
-// and later GoWorkerEntrypoint) resolves.
-export class WorkflowEntrypointBase {
-  constructor(ctx, env) {
-    this.ctx = ctx;
-    this.env = env;
-  }
-}
-
-export class WorkerEntrypointBase {
-  constructor(ctx, env) {
-    this.ctx = ctx;
-    this.env = env;
-  }
-}
-
 export function createRuntimeContext({ binding }) {
   return {
     // Expose Deno environment variables through the same `env` shape used by

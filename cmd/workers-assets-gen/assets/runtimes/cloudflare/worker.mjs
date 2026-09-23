@@ -1,46 +1,9 @@
-import "./wasm_exec.js";
+import { run } from "./core.mjs";
 import {
   createRuntimeContext,
-  loadModule,
   WorkflowEntrypointBase,
   WorkerEntrypointBase,
 } from "./runtime.mjs";
-
-let mod;
-
-globalThis.tryCatch = (fn) => {
-  try {
-    return {
-      result: fn(),
-    };
-  } catch (e) {
-    return {
-      error: e,
-    };
-  }
-};
-
-async function run(ctx) {
-  if (mod === undefined) {
-    mod = await loadModule();
-  }
-  const go = new Go();
-
-  let ready;
-  const readyPromise = new Promise((resolve) => {
-    ready = resolve;
-  });
-  const instance = new WebAssembly.Instance(mod, {
-    ...go.importObject,
-    workers: {
-      ready: () => {
-        ready();
-      },
-    },
-  });
-  go.run(instance, ctx);
-  await readyPromise;
-}
 
 async function fetch(req, env, ctx) {
   const binding = {};
@@ -52,22 +15,6 @@ async function scheduled(event, env, ctx) {
   const binding = {};
   await run(createRuntimeContext({ env, ctx, binding }));
   return binding.runScheduler(event);
-}
-
-// cron handles a Deno Deploy cron invocation. Deno Deploy discovers
-// Deno.cron() calls by evaluating top-level module code, so schedules are
-// declared in crons.mjs (e.g.
-// `Deno.cron("name", "0 * * * *", () => worker.cron("name"))`) and dispatch
-// to the handler registered in Go via deno.OnCron(name, handler).
-async function cron(name, env, ctx) {
-  const binding = {};
-  await run(createRuntimeContext({ env, ctx, binding }));
-  if (binding.runCron === undefined) {
-    throw new Error(
-      "runCron is not registered: import github.com/syumai/workers-go/exp/deno and call deno.OnCron in Go",
-    );
-  }
-  return binding.runCron(name);
 }
 
 async function queue(batch, env, ctx) {
@@ -101,7 +48,6 @@ async function onRequest(ctx) {
 export default {
   fetch,
   scheduled,
-  cron,
   queue,
   email,
   tail,
