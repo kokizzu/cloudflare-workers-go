@@ -8,7 +8,9 @@ sidebar:
 
 ## How do I deploy a worker implemented in this package?
 
-To deploy a Worker, the following steps are required.
+The fastest way is the `Deploy to Cloudflare` button on the [Quickstart](/quickstart) page, which creates and deploys a project for you.
+
+To deploy manually, the following steps are required.
 
 - Create a worker project using [wrangler](https://developers.cloudflare.com/workers/wrangler/).
 - Build a Wasm binary.
@@ -19,6 +21,44 @@ The [worker-go template](https://github.com/syumai/workers-go/tree/main/_templat
 For a smaller Wasm binary, use the [worker-tinygo template](https://github.com/syumai/workers-go/tree/main/_templates/cloudflare/worker-tinygo) instead. It requires TinyGo 0.42.0 or later — TinyGo 0.41.x cannot build `net/http` for Wasm (see [tinygo-org/tinygo#5350](https://github.com/tinygo-org/tinygo/issues/5350)).
 
 To host a Go type as a [Durable Object](https://developers.cloudflare.com/durable-objects/), use the [`durable-object-go` template](https://github.com/syumai/workers-go/tree/main/_templates/cloudflare/durable-object-go) instead — see [Durable Objects](/cloudflare/durable-objects).
+
+## Should I use the Go or TinyGo template?
+
+- **`worker-go`** builds with the standard Go toolchain: the full standard library and the best package compatibility, at the cost of a larger Wasm binary.
+- **`worker-tinygo`** produces a much smaller binary, which helps with cold-start time and deployment size, but requires TinyGo 0.42.0 or later and does not support every standard library package. If a package you need fails to build under TinyGo, switch to `worker-go`.
+
+## `npm run build` fails with "go.mod file not found"
+
+The templates do not include a `go.mod` — initialize Go modules in the new project before the first build or deploy, as shown in the [Quickstart](/quickstart):
+
+```bash
+go mod init
+go mod tidy
+```
+
+## Can a single worker handle HTTP and other triggers (Cron, Queues) at the same time?
+
+Yes. Register each part with its non-blocking function — `workers.ServeNonBlock`, `cron.ScheduleTaskNonBlock`, `queues.ConsumeNonBlock` — then call `workers.Ready()` and wait on the `Done` channels. See [Combine multiple triggers](/cloudflare#combine-multiple-triggers).
+
+## Why do I see "Go program has already exited" when using `cloudflare.WaitUntil`?
+
+On workers-go v0.36.0 and earlier, a `WaitUntil` task that parks — for example on `time.Sleep` or a channel wait — fails once the handler returns, because the Go program exits while the task is still pending. This is fixed on the main branch, where `WaitUntil` tasks are tracked as background work that keeps the program alive until they return; until the fix is released, keep `WaitUntil` tasks synchronous and fast. See [FetchEvent](/cloudflare/fetch-event).
+
+## How do I set CORS or other response headers?
+
+`workers.Serve` serves a plain `http.Handler`, so headers work exactly as in any Go HTTP server — write them on the `http.ResponseWriter`, or wrap your handler in middleware such as [chi's CORS middleware](https://github.com/go-chi/cors). There is nothing Workers-specific to configure in Go.
+
+## Can I run the handler locally without building for Wasm?
+
+Yes. When built for a non-JS target, `workers.Serve()` starts a regular HTTP server on `:9900` (or the `PORT` environment variable) — handy for debugging handler logic without the Wasm toolchain. Cloudflare-specific APIs are unavailable in this mode; see [Run locally without JavaScript](/cloudflare#run-locally-without-javascript).
+
+## Which Workers features are supported?
+
+Core serving, bindings, Cron Triggers, Queues, and `FetchEvent` are stable; D1, Durable Objects, Workflows, RPC, WebSocket, and the `exp/cloudflare` packages are experimental. The full list is in the [feature support table](/introduction#feature-support).
+
+## How do I migrate from `github.com/syumai/workers`?
+
+The module was renamed to `github.com/syumai/workers-go` in v0.35.0. Rewrite the import paths and run `go mod tidy` — the exact commands are in [Migrating from `github.com/syumai/workers`](/introduction#migrating-from-githubcomsyumaiworkers). The old path still works as a deprecated forwarding module for a transition period.
 
 ## Where can I discuss contributions, or ask questions about how to use the library?
 
