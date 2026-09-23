@@ -24,7 +24,7 @@ export default defineMeta({
     "hyperdrive",
     "images",
     "ratelimit",
-    "secrets",
+    "secretsstore",
     "tail",
     "vectorize",
     "versions",

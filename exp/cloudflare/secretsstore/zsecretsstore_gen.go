@@ -2,11 +2,11 @@
 
 //go:build js && wasm
 
-// Package secrets provides the Secrets Store binding
+// Package secretsstore provides the Secrets Store binding
 // (https://developers.cloudflare.com/secrets-store/integrations/workers/):
 // SecretsStoreSecret, a binding exposing a single async Get() (string,
 // error).
-package secrets
+package secretsstore
 
 import (
 	"syscall/js"
