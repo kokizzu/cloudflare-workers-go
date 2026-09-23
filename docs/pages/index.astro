@@ -7,6 +7,8 @@ import data from "blume:data";
 
 const { config } = data;
 const repoUrl = config.repoUrl ?? "https://github.com/syumai/workers-go";
+const deployUrl =
+  "https://deploy.workers.cloudflare.com/?url=https%3A%2F%2Fgithub.com%2Fsyumai%2Fworker-go-deploy";
 
 const platforms = [
   {
@@ -136,6 +138,13 @@ func main() {
           <Icon name="github" size={16} />
           GitHub
         </a>
+        <a href={deployUrl} rel="noopener" target="_blank">
+          <img
+            alt="Deploy to Cloudflare"
+            class="h-[39px]"
+            src="https://deploy.workers.cloudflare.com/button"
+          />
+        </a>
       </div>
       <div
         class="mx-auto mt-8 inline-flex items-center gap-3 rounded-blume border border-border bg-code px-4 py-2.5"
@@ -233,13 +242,22 @@ func main() {
         Scaffold a project from the Cloudflare template, write an http.Handler,
         and ship it.
       </p>
-      <a
-        class="mt-8 inline-flex items-center gap-2 rounded-blume bg-action px-5 py-2.5 font-medium text-action-foreground text-sm transition-opacity hover:opacity-90"
-        href={withBase("/quickstart")}
-      >
-        <Icon name="rocket" size={16} />
-        Quickstart
-      </a>
+      <div class="mt-8 flex flex-wrap items-center justify-center gap-3">
+        <a
+          class="inline-flex items-center gap-2 rounded-blume bg-action px-5 py-2.5 font-medium text-action-foreground text-sm transition-opacity hover:opacity-90"
+          href={withBase("/quickstart")}
+        >
+          <Icon name="rocket" size={16} />
+          Quickstart
+        </a>
+        <a href={deployUrl} rel="noopener" target="_blank">
+          <img
+            alt="Deploy to Cloudflare"
+            class="h-[39px]"
+            src="https://deploy.workers.cloudflare.com/button"
+          />
+        </a>
+      </div>
     </div>
   </section>
 
