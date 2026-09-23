@@ -56,6 +56,28 @@ if err != nil {
 defer kv.Close()
 ```
 
+Locally, `Deno.openKv` requires the `--unstable-kv` flag (add it to the `dev` task in `deno.json`). On Deno Deploy, unstable APIs are gated by the `unstable` field in `deno.json`; the template already sets `"unstable": ["kv", "cron"]` and adds `./deno.json` to `deploy.include` so the deployed runtime reads it.
+
+### Cron jobs
+
+Deno Deploy discovers cron jobs by evaluating a module's **top-level JavaScript** at deployment time — a `Deno.cron()` call made from Go (via `deno.Cron`) runs only once a request boots the Wasm module, so it is never seen by the scheduler. Declare each job's schedule in `crons.mjs` at the project root instead; `workers-assets-gen` copies it into `build/` next to `main.mjs`, which imports it:
+
+```js
+// crons.mjs (project root)
+import worker from "./worker.mjs";
+Deno.cron("my-job", "0 * * * *", () => worker.cron("my-job"));
+```
+
+and register the handler in Go with `deno.OnCron`:
+
+```go
+deno.OnCron("my-job", func() {
+	// runs every hour
+})
+```
+
+Locally, `Deno.cron` requires the `--unstable-cron` flag (add it to the `dev` task in `deno.json`). `deno.Cron` still works under `deno run` for jobs you only need locally, but only the `crons.mjs` + `deno.OnCron` pair works on Deno Deploy.
+
 ## Commands
 
 | Command | Description |
