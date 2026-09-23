@@ -14,10 +14,16 @@
 
 ## Getting Started
 
+- Create a new project using this template (requires Node.js and npm for `npx degit`).
+
+```console
+npx degit github:syumai/workers-go/_templates/deno/worker-go my-app
+```
+
 - Initialize a project.
 
 ```console
-cd my-app
+cd my-app # A directory of the project created by the above command
 go mod init
 go mod tidy
 deno task build # build Go Wasm binary and generate JS assets
