@@ -1,3 +1,4 @@
+core.mjs
 crons.mjs
 main.mjs
 runtime.mjs

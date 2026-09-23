@@ -21,7 +21,7 @@ globalThis.crypto ??= require("crypto");
 
 require("./wasm_exec");
 
-// same definition as cmd/workers-assets-gen/assets/common/worker.mjs, needed
+// same definition as cmd/workers-assets-gen/assets/core/core.mjs, needed
 // by internal/jsutil.TryCatch and cloudflare/sockets.Connect.
 globalThis.tryCatch = (fn) => {
 	try {

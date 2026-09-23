@@ -17,10 +17,8 @@ import (
 var assets embed.FS
 
 const (
-	assetDirPath        = "assets"
-	commonDirPath       = "assets/common"
-	runtimeDirPath      = "assets/runtime"
-	entryDirPath        = "assets/entry"
+	coreDirPath         = "assets/core"
+	runtimesDirPath     = "assets/runtimes"
 	defaultBuildDirPath = "build"
 )
 
@@ -195,6 +193,21 @@ func validateClassNames(durableObjects, workflows []string, entrypoints []entryp
 }
 
 func runMain(mode Mode, runtime Runtime, buildDirPath string, durableObjects, workflows []string, entrypoints []entrypointSpec) error {
+	spec, ok := runtimeSpecs[runtime]
+	if !ok {
+		return fmt.Errorf("unexpected runtime: %s", runtime)
+	}
+	if !spec.cfClassFlags {
+		if len(durableObjects) > 0 {
+			return fmt.Errorf("-durable-objects requires -runtime=%s", RuntimeCloudflare)
+		}
+		if len(workflows) > 0 {
+			return fmt.Errorf("-workflows requires -runtime=%s", RuntimeCloudflare)
+		}
+		if len(entrypoints) > 0 {
+			return fmt.Errorf("-entrypoints requires -runtime=%s", RuntimeCloudflare)
+		}
+	}
 	if err := validateClassNames(durableObjects, workflows, entrypoints); err != nil {
 		return err
 	}
@@ -207,26 +220,45 @@ func runMain(mode Mode, runtime Runtime, buildDirPath string, durableObjects, wo
 	if err := copyWasmExecJS(mode, buildDirPath); err != nil {
 		return err
 	}
-	if err := copyRuntimeAssets(runtime, buildDirPath); err != nil {
+	if err := copyFile(path.Join(buildDirPath, "core.mjs"), path.Join(coreDirPath, "core.mjs")); err != nil {
 		return err
 	}
-	if err := copyEntryAsset(runtime, buildDirPath); err != nil {
+	if err := emitRuntimeAssets(runtime, spec, buildDirPath); err != nil {
 		return err
 	}
-	if err := copyCronAsset(runtime, buildDirPath); err != nil {
+	if err := appendDurableObjectClasses(buildDirPath, spec, durableObjects); err != nil {
 		return err
 	}
-	if err := copyCommonAssets(runtime, buildDirPath); err != nil {
+	if err := appendWorkflowClasses(buildDirPath, spec, workflows); err != nil {
 		return err
 	}
-	if err := appendDurableObjectClasses(buildDirPath, durableObjects); err != nil {
+	if err := appendEntrypointClasses(buildDirPath, spec, entrypoints); err != nil {
 		return err
 	}
-	if err := appendWorkflowClasses(buildDirPath, workflows); err != nil {
-		return err
-	}
-	if err := appendEntrypointClasses(buildDirPath, entrypoints); err != nil {
-		return err
+	return nil
+}
+
+// emitRuntimeAssets copies every file in spec.files from the runtime's
+// asset directory into the build directory, honoring per-file
+// projectOverride rules.
+func emitRuntimeAssets(runtime Runtime, spec runtimeSpec, buildDirPath string) error {
+	runtimeDir := path.Join(runtimesDirPath, string(runtime))
+	for _, rule := range spec.files {
+		if rule.projectOverride != "" {
+			src, err := os.ReadFile(rule.projectOverride)
+			if err == nil {
+				if err := os.WriteFile(path.Join(buildDirPath, rule.dest), src, 0o644); err != nil {
+					return err
+				}
+				continue
+			}
+			if !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+		}
+		if err := copyFile(path.Join(buildDirPath, rule.dest), path.Join(runtimeDir, rule.src)); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -241,11 +273,11 @@ func runMain(mode Mode, runtime Runtime, buildDirPath string, durableObjects, wo
 // this worker.mjs exports for the Durable Object namespace's `new_classes`/
 // `new_sqlite_classes` migration) must match one of these names exactly.
 // If durableObjects is empty, worker.mjs is left untouched.
-func appendDurableObjectClasses(buildDirPath string, durableObjects []string) error {
+func appendDurableObjectClasses(buildDirPath string, spec runtimeSpec, durableObjects []string) error {
 	if len(durableObjects) == 0 {
 		return nil
 	}
-	workerPath := path.Join(buildDirPath, "worker.mjs")
+	workerPath := path.Join(buildDirPath, spec.workerFile)
 	f, err := os.OpenFile(workerPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
@@ -267,11 +299,11 @@ func appendDurableObjectClasses(buildDirPath string, durableObjects []string) er
 //
 // wrangler.toml's [[workflows]] class_name must match one of these names
 // exactly. If workflows is empty, worker.mjs is left untouched.
-func appendWorkflowClasses(buildDirPath string, workflows []string) error {
+func appendWorkflowClasses(buildDirPath string, spec runtimeSpec, workflows []string) error {
 	if len(workflows) == 0 {
 		return nil
 	}
-	workerPath := path.Join(buildDirPath, "worker.mjs")
+	workerPath := path.Join(buildDirPath, spec.workerFile)
 	f, err := os.OpenFile(workerPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
@@ -302,11 +334,11 @@ func appendWorkflowClasses(buildDirPath string, workflows []string) error {
 // exposing RPC) must match one of these names exactly, as must the
 // className passed to rpc.Register/rpc.RegisterFetch on the Go side. If
 // entrypoints is empty, worker.mjs is left untouched.
-func appendEntrypointClasses(buildDirPath string, entrypoints []entrypointSpec) error {
+func appendEntrypointClasses(buildDirPath string, spec runtimeSpec, entrypoints []entrypointSpec) error {
 	if len(entrypoints) == 0 {
 		return nil
 	}
-	workerPath := path.Join(buildDirPath, "worker.mjs")
+	workerPath := path.Join(buildDirPath, spec.workerFile)
 	f, err := os.OpenFile(workerPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
@@ -335,81 +367,9 @@ func copyWasmExecJS(mode Mode, buildDirPath string) error {
 		return fmt.Errorf("unexpected mode: %s", mode)
 	}
 	destPath := path.Join(buildDirPath, "wasm_exec.js")
-	originPath := path.Join(assetDirPath, fileName)
+	originPath := path.Join(coreDirPath, fileName)
 	if err := copyFile(destPath, originPath); err != nil {
 		return err
-	}
-	return nil
-}
-
-func copyRuntimeAssets(runtime Runtime, buildDirPath string) error {
-	destPath := path.Join(buildDirPath, "runtime.mjs")
-	originPath := path.Join(runtimeDirPath, runtime.AssetFileName())
-	if err := copyFile(destPath, originPath); err != nil {
-		return err
-	}
-	return nil
-}
-
-// copyEntryAsset copies the runtime's entry point file to "main.mjs" in the
-// build directory when the runtime provides one (e.g. Deno, whose entry point
-// calls Deno.serve). Runtimes that use worker.mjs as their entry point
-// (Cloudflare, browser) have no entry asset and are skipped.
-func copyEntryAsset(runtime Runtime, buildDirPath string) error {
-	originPath := path.Join(entryDirPath, string(runtime)+".mjs")
-	if _, err := assets.ReadFile(originPath); err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil
-		}
-		return err
-	}
-	destPath := path.Join(buildDirPath, "main.mjs")
-	if err := copyFile(destPath, originPath); err != nil {
-		return err
-	}
-	return nil
-}
-
-// copyCronAsset writes crons.mjs into the build directory for the Deno
-// runtime: the project's own ./crons.mjs when it exists, otherwise the
-// stub asset. Deno Deploy discovers cron jobs by evaluating top-level
-// module code at deployment time, so Deno.cron declarations must live in a
-// top-level JS module — Go code, which only runs once a trigger boots the
-// Wasm instance, cannot register them. main.mjs always imports
-// ./crons.mjs, so the file must exist in the output either way.
-func copyCronAsset(runtime Runtime, buildDirPath string) error {
-	if runtime != RuntimeDeno {
-		return nil
-	}
-	destPath := path.Join(buildDirPath, "crons.mjs")
-	src, err := os.ReadFile("crons.mjs")
-	if err == nil {
-		return os.WriteFile(destPath, src, 0o644)
-	}
-	if !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	return copyFile(destPath, path.Join(entryDirPath, "crons.mjs"))
-}
-
-func copyCommonAssets(runtime Runtime, buildDirPath string) error {
-	entries, err := assets.ReadDir(commonDirPath)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		fileName := entry.Name()
-		// Neon Functions only loads an entry file named index.mjs or index.js,
-		// so the worker entry point is renamed for that runtime.
-		// https://neon.com/docs/compute/functions/deploy
-		if runtime == RuntimeNeon && fileName == "worker.mjs" {
-			fileName = "index.mjs"
-		}
-		destPath := path.Join(buildDirPath, fileName)
-		originPath := path.Join(commonDirPath, entry.Name())
-		if err := copyFile(destPath, originPath); err != nil {
-			return err
-		}
 	}
 	return nil
 }

@@ -90,30 +90,31 @@ func TestRunMain(t *testing.T) {
 				t.Fatalf("runMain() error = %v", err)
 			}
 
-			wantWasmExec, err := assets.ReadFile(path.Join(assetDirPath, tt.wantWasmExecF))
+			wantWasmExec, err := assets.ReadFile(path.Join(coreDirPath, tt.wantWasmExecF))
 			if err != nil {
 				t.Fatalf("assets.ReadFile() error = %v", err)
 			}
 			assertFileEqualsBytes(t, filepath.Join(dir, "wasm_exec.js"), wantWasmExec)
 
-			wantRuntime, err := assets.ReadFile(path.Join(runtimeDirPath, tt.runtime.AssetFileName()))
+			wantCore, err := assets.ReadFile(path.Join(coreDirPath, "core.mjs"))
+			if err != nil {
+				t.Fatalf("assets.ReadFile() error = %v", err)
+			}
+			assertFileEqualsBytes(t, filepath.Join(dir, "core.mjs"), wantCore)
+
+			spec := tt.runtime.spec()
+			runtimeDir := path.Join(runtimesDirPath, string(tt.runtime))
+			wantRuntime, err := assets.ReadFile(path.Join(runtimeDir, "runtime.mjs"))
 			if err != nil {
 				t.Fatalf("assets.ReadFile() error = %v", err)
 			}
 			assertFileEqualsBytes(t, filepath.Join(dir, "runtime.mjs"), wantRuntime)
 
-			wantWorker, err := assets.ReadFile(path.Join(commonDirPath, "worker.mjs"))
+			wantWorker, err := assets.ReadFile(path.Join(runtimeDir, spec.workerFile))
 			if err != nil {
 				t.Fatalf("assets.ReadFile() error = %v", err)
 			}
-			// Neon Functions only loads an entry file named index.mjs or
-			// index.js, so worker.mjs is renamed to index.mjs for that
-			// runtime (see copyCommonAssets in main.go).
-			workerFileName := "worker.mjs"
-			if tt.runtime == RuntimeNeon {
-				workerFileName = "index.mjs"
-			}
-			assertFileEqualsBytes(t, filepath.Join(dir, workerFileName), wantWorker)
+			assertFileEqualsBytes(t, filepath.Join(dir, spec.workerFile), wantWorker)
 		})
 	}
 }
@@ -151,6 +152,52 @@ func TestRunMain_invalidRuntime(t *testing.T) {
 	dir := t.TempDir()
 	if err := runMain(ModeGo, Runtime("invalid"), dir, nil, nil, nil); err == nil {
 		t.Error("runMain() error = nil, want non-nil for an invalid runtime")
+	}
+}
+
+// TestRunMain_cfClassFlagsRequireCloudflare ensures the Cloudflare-only
+// class flags are rejected for other runtimes: they append subclasses of
+// base classes (GoDurableObject, GoWorkflowEntrypoint, GoWorkerEntrypoint)
+// that only exist in the Cloudflare worker, so generating them elsewhere
+// would emit a worker whose classes extend nothing.
+func TestRunMain_cfClassFlagsRequireCloudflare(t *testing.T) {
+	tests := map[string]struct {
+		durableObjects []string
+		workflows      []string
+		entrypoints    []entrypointSpec
+	}{
+		"durable-objects": {durableObjects: []string{"Counter"}},
+		"workflows":       {workflows: []string{"MyWorkflow"}},
+		"entrypoints":     {entrypoints: []entrypointSpec{{Name: "MyService"}}},
+	}
+	for _, runtime := range []Runtime{RuntimeBrowser, RuntimeDeno, RuntimeNeon} {
+		for name, tt := range tests {
+			t.Run(string(runtime)+"/"+name, func(t *testing.T) {
+				dir := t.TempDir()
+				err := runMain(ModeGo, runtime, dir, tt.durableObjects, tt.workflows, tt.entrypoints)
+				if err == nil {
+					t.Fatalf("runMain() error = nil, want non-nil")
+				}
+				if !strings.Contains(err.Error(), "-runtime=cloudflare") {
+					t.Errorf("runMain() error = %q, want it to mention -runtime=cloudflare", err)
+				}
+				// The error must be raised before the build directory is
+				// populated, or stale output would silently survive.
+				entries, readErr := os.ReadDir(dir)
+				if readErr != nil {
+					t.Fatalf("os.ReadDir() error = %v", readErr)
+				}
+				if len(entries) != 0 {
+					t.Errorf("build dir is not empty after rejected run: %v", entries)
+				}
+			})
+		}
+	}
+
+	// Sanity check: the same flags are accepted for Cloudflare.
+	dir := t.TempDir()
+	if err := runMain(ModeGo, RuntimeCloudflare, dir, []string{"Counter"}, []string{"MyWorkflow"}, []entrypointSpec{{Name: "MyService"}}); err != nil {
+		t.Fatalf("runMain() error = %v", err)
 	}
 }
 
@@ -216,7 +263,7 @@ func TestRunMain_denoCrons(t *testing.T) {
 		if err := runMain(ModeGo, RuntimeDeno, dir, nil, nil, nil); err != nil {
 			t.Fatalf("runMain() error = %v", err)
 		}
-		wantCrons, err := assets.ReadFile(path.Join(entryDirPath, "crons.mjs"))
+		wantCrons, err := assets.ReadFile(path.Join(runtimesDirPath, string(RuntimeDeno), "crons.mjs"))
 		if err != nil {
 			t.Fatalf("assets.ReadFile() error = %v", err)
 		}

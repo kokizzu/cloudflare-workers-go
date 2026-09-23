@@ -15,7 +15,7 @@
 //    tests can assert on it (see internal/jstest.ReadyCount).
 // 4. internal/jsutil.TryCatch and cloudflare/sockets.Connect call
 //    globalThis.tryCatch, which only exists in the Workers runtime
-//    (cmd/workers-assets-gen/assets/common/worker.mjs). We polyfill the same
+//    (cmd/workers-assets-gen/assets/core/core.mjs). We polyfill the same
 //    definition here so those code paths work under Node too.
 
 const ENV_LINE =
@@ -28,7 +28,7 @@ const REQUIRE_WASM_EXEC_LINE = 'require("./wasm_exec");';
 
 const REQUIRE_WASM_EXEC_REPLACEMENT = `require("./wasm_exec");
 
-// same definition as cmd/workers-assets-gen/assets/common/worker.mjs, needed
+// same definition as cmd/workers-assets-gen/assets/core/core.mjs, needed
 // by internal/jsutil.TryCatch and cloudflare/sockets.Connect.
 globalThis.tryCatch = (fn) => {
 	try {

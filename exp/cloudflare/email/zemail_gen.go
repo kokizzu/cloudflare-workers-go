@@ -7,7 +7,7 @@
 // ForwardableEmailMessage passed to a Worker's email(message, env, ctx)
 // handler (registered from exp/cloudflare/email's sibling hand-written
 // email.go via jsutil.RegisterAsyncHandler("handleEmail", ...) and
-// cmd/workers-assets-gen/assets/common/worker.mjs's email export).
+// cmd/workers-assets-gen/assets/runtimes/cloudflare/worker.mjs's email export).
 //
 // EmailMessage (the outbound message type SendEmail.send and
 // ForwardableEmailMessage.reply take) is deliberately left out of include:.
@@ -27,7 +27,7 @@
 // lossy generated struct. The hand-written email.go's own EmailMessage type
 // fills that gap: it holds the real JS instance (obtained via
 // cfruntimecontext.GetRuntimeContextValue("EmailMessage"), set by the
-// runtime shims in cmd/workers-assets-gen/assets/runtime/{cloudflare,browser}.mjs)
+// runtime shims in cmd/workers-assets-gen/assets/runtimes/cloudflare/runtime.mjs)
 // and exposes JSValue() for SendEmail.Send/ForwardableEmailMessage.Reply to
 // pass straight through as the js.Value parameter cfgen already generates
 // for them.

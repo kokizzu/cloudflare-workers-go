@@ -14,7 +14,7 @@ import (
 
 // withEmailMessageClass installs a fake EmailMessage constructor at
 // jsutil.RuntimeContext.EmailMessage (mirroring what
-// cmd/workers-assets-gen/assets/runtime/cloudflare.mjs adds to the runtime
+// cmd/workers-assets-gen/assets/runtimes/cloudflare/runtime.mjs adds to the runtime
 // context for the real "cloudflare:email" module class) for the duration
 // of the test, and restores the previous runtime context afterwards.
 func withEmailMessageClass(t *testing.T, class js.Value) {

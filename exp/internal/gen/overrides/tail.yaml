@@ -6,7 +6,7 @@ doc: |
   (https://developers.cloudflare.com/workers/observability/logs/tail-workers/).
   TraceItem and its nested types are generated here; tail.go's hand-written
   Handle registers the Worker's own tail(events, env, ctx) export (added to
-  cmd/workers-assets-gen/assets/common/worker.mjs) the same way
+  cmd/workers-assets-gen/assets/runtimes/cloudflare/worker.mjs) the same way
   cloudflare/queues.Consume registers queue and exp/cloudflare/email.Handle
   registers email.
 
