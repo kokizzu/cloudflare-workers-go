@@ -109,7 +109,7 @@ exp/cloudflare/<pkg>/<pkg>.go                                (hand-written, only
   `tail_consumers` config. `tail.Handle` registers the handler the same way
   `email.Handle` does. See "Tail Workers" below for `TraceItem.event`'s
   hand-written `EventKind()`/typed-accessor treatment.
-* `secrets` generates `SecretsStoreSecret`, the [Secrets Store](https://developers.cloudflare.com/secrets-store/integrations/workers/)
+* `secretsstore` generates `SecretsStoreSecret`, the [Secrets Store](https://developers.cloudflare.com/secrets-store/integrations/workers/)
   binding — a single async `Get() (string, error)`. Nothing hand-written.
 * `dispatch` generates `DispatchNamespace`/`DynamicDispatchOptions`/
   `DynamicDispatchLimits`, the [Workers for Platforms dynamic dispatch](https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/get-started/dynamic-dispatch/)

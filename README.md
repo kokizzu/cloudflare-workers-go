@@ -59,7 +59,7 @@ In addition to the stable packages above, [`exp/cloudflare`](exp/cloudflare/READ
 | [`websocket`](exp/cloudflare/websocket) | Server-side WebSocket upgrade, including Durable Object hibernation support |
 | [`durableobjects`](exp/cloudflare/durableobjects) | Durable Objects: generated bindings plus hand-written hosting support for writing a Durable Object class itself in Go — see [Hosting a Go type as a Durable Object](exp/cloudflare/README.md#hosting-a-go-type-as-a-durable-object) |
 | [`tail`](exp/cloudflare/tail) | Tail Worker support: the `tail(events, env, ctx)` handler for consuming another Worker's execution traces |
-| [`secrets`](exp/cloudflare/secrets) | Secrets Store binding |
+| [`secretsstore`](exp/cloudflare/secretsstore) | Secrets Store binding |
 | [`dispatch`](exp/cloudflare/dispatch) | Workers for Platforms dynamic dispatch namespace binding |
 
 See [exp/cloudflare/README.md](exp/cloudflare/README.md) for how these packages are generated, their type-mapping conventions, and the guide to hosting a Go type as a Durable Object (also available as the [`durable-object-go` template](_templates/cloudflare/durable-object-go)).
