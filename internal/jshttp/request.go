@@ -14,8 +14,8 @@ import (
 // ToBody converts JavaScript sides ReadableStream (can be null) to io.ReadCloser.
 //   - ReadableStream: https://developer.mozilla.org/en-US/docs/Web/API/ReadableStream
 func ToBody(streamOrNull js.Value) io.ReadCloser {
-	if streamOrNull.IsNull() {
-		return nil
+	if streamOrNull.IsNull() || streamOrNull.IsUndefined() {
+		return http.NoBody
 	}
 	return jsutil.ConvertReadableStreamToReadCloser(streamOrNull)
 }
