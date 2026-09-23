@@ -70,5 +70,17 @@ go get github.com/syumai/workers-go
 ```
 
 :::note
-This module was published as `github.com/syumai/workers` up to v0.34.0 and renamed to `github.com/syumai/workers-go` in v0.35.0. The old path still works as a deprecated forwarding module — see the [README](https://github.com/syumai/workers-go#migrating-from-githubcomsyumaiworkers) for migration steps.
+This module was published as `github.com/syumai/workers` up to v0.34.0 and renamed to `github.com/syumai/workers-go` in v0.35.0 ([#173](https://github.com/syumai/workers-go/issues/173)). The old path still works as a deprecated forwarding module that re-exports this module's API and follows its releases for a transition period.
 :::
+
+### Migrating from `github.com/syumai/workers`
+
+To switch, rewrite the import paths and tidy:
+
+```bash
+# Linux
+find . \( -name '*.go' -o -name go.mod \) -exec sed -i 's|github.com/syumai/workers\([/" ]\)|github.com/syumai/workers-go\1|g' {} +
+# macOS
+find . \( -name '*.go' -o -name go.mod \) -exec sed -i '' 's|github.com/syumai/workers\([/" ]\)|github.com/syumai/workers-go\1|g' {} +
+go mod tidy
+```
