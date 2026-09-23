@@ -37,6 +37,16 @@ build-examples:
 gen-wasm-exec:
 	cd scripts/gen-wasm-exec && pnpm run gen --go $(GO_VERSION) --tinygo $(TINYGO_VERSION)
 
+.PHONY: gen-deno
+gen-deno:
+	cd scripts/gen-deno && pnpm run gen
+
+# Refreshes the Deno API snapshot (scripts/gen-deno/deno-doc.json) consumed
+# by gen-deno. Requires the deno binary.
+.PHONY: gen-deno-snapshot
+gen-deno-snapshot:
+	cd scripts/gen-deno && pnpm run snapshot
+
 .PHONY: gen-bindings-extract
 gen-bindings-extract:
 	pnpm -C scripts/gen-bindings install --frozen-lockfile && pnpm -C scripts/gen-bindings run extract

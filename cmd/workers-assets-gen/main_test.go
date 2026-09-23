@@ -78,6 +78,10 @@ func TestRunMain(t *testing.T) {
 			mode: ModeTinygo, runtime: RuntimeNeon,
 			wantWasmExecF: "wasm_exec_tinygo.js",
 		},
+		"go-deno": {
+			mode: ModeGo, runtime: RuntimeDeno,
+			wantWasmExecF: "wasm_exec_go.js",
+		},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -161,6 +165,7 @@ func TestRunMain_fileList(t *testing.T) {
 		"tinygo-cloudflare": {mode: ModeTinygo, runtime: RuntimeCloudflare},
 		"tinygo-browser":    {mode: ModeTinygo, runtime: RuntimeBrowser},
 		"tinygo-neon":       {mode: ModeTinygo, runtime: RuntimeNeon},
+		"go-deno":           {mode: ModeGo, runtime: RuntimeDeno},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -199,6 +204,56 @@ func TestRunMain_fileList(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRunMain_denoCrons covers the Deno cron support: main.mjs always
+// imports ./crons.mjs, and the output crons.mjs is the project's own
+// ./crons.mjs when present, else the stub asset.
+func TestRunMain_denoCrons(t *testing.T) {
+	t.Run("stub when no project crons.mjs", func(t *testing.T) {
+		chdir(t, t.TempDir())
+		dir := t.TempDir()
+		if err := runMain(ModeGo, RuntimeDeno, dir, nil, nil, nil); err != nil {
+			t.Fatalf("runMain() error = %v", err)
+		}
+		wantCrons, err := assets.ReadFile(path.Join(entryDirPath, "crons.mjs"))
+		if err != nil {
+			t.Fatalf("assets.ReadFile() error = %v", err)
+		}
+		assertFileEqualsBytes(t, filepath.Join(dir, "crons.mjs"), wantCrons)
+		mainContent, err := os.ReadFile(filepath.Join(dir, "main.mjs"))
+		if err != nil {
+			t.Fatalf("os.ReadFile() error = %v", err)
+		}
+		if !strings.Contains(string(mainContent), `import "./crons.mjs";`) {
+			t.Errorf("main.mjs does not import ./crons.mjs:\n%s", mainContent)
+		}
+	})
+
+	t.Run("project crons.mjs wins over stub", func(t *testing.T) {
+		projectDir := t.TempDir()
+		want := []byte("// user cron definitions\n")
+		if err := os.WriteFile(filepath.Join(projectDir, "crons.mjs"), want, 0o644); err != nil {
+			t.Fatalf("os.WriteFile() error = %v", err)
+		}
+		chdir(t, projectDir)
+		dir := t.TempDir()
+		if err := runMain(ModeGo, RuntimeDeno, dir, nil, nil, nil); err != nil {
+			t.Fatalf("runMain() error = %v", err)
+		}
+		assertFileEqualsBytes(t, filepath.Join(dir, "crons.mjs"), want)
+	})
+
+	t.Run("no crons.mjs for other runtimes", func(t *testing.T) {
+		chdir(t, t.TempDir())
+		dir := t.TempDir()
+		if err := runMain(ModeGo, RuntimeCloudflare, dir, nil, nil, nil); err != nil {
+			t.Fatalf("runMain() error = %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "crons.mjs")); !os.IsNotExist(err) {
+			t.Errorf("crons.mjs exists in cloudflare output; os.Stat error = %v, want os.IsNotExist", err)
+		}
+	})
 }
 
 func TestParseEntrypoints(t *testing.T) {
@@ -296,6 +351,18 @@ func TestValidateClassNames(t *testing.T) {
 			}
 		})
 	}
+}
+
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd() error = %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("os.Chdir(%q) error = %v", dir, err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
 }
 
 func assertFileEqualsBytes(t *testing.T, filePath string, want []byte) {

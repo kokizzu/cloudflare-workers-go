@@ -1,0 +1,19 @@
+{
+  "name": "gen-deno",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "gen": "node src/index.ts",
+    "snapshot": "node src/snapshot.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "packageManager": "pnpm@11.0.4",
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "typescript": "^6.0.3"
+  }
+}

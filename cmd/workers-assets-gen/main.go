@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"embed"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"strings"
@@ -18,6 +20,7 @@ const (
 	assetDirPath        = "assets"
 	commonDirPath       = "assets/common"
 	runtimeDirPath      = "assets/runtime"
+	entryDirPath        = "assets/entry"
 	defaultBuildDirPath = "build"
 )
 
@@ -31,7 +34,7 @@ func main() {
 		entrypoints    string
 	)
 	flag.StringVar(&mode, "mode", string(ModeTinygo), `build mode: tinygo or go`)
-	flag.StringVar(&runtime, "runtime", string(RuntimeCloudflare), `runtime: cloudflare, browser, or neon`)
+	flag.StringVar(&runtime, "runtime", string(RuntimeCloudflare), `runtime: cloudflare, browser, deno, or neon`)
 	flag.StringVar(&buildDirPath, "o", defaultBuildDirPath, `output dir path: defaults to "build"`)
 	flag.StringVar(&durableObjects, "durable-objects", "", `comma-separated list of Durable Object class names to define in worker.mjs (e.g. "Counter,Room")`)
 	flag.StringVar(&workflows, "workflows", "", `comma-separated list of Workflow class names to define in worker.mjs (e.g. "MyWorkflow,Other")`)
@@ -207,6 +210,12 @@ func runMain(mode Mode, runtime Runtime, buildDirPath string, durableObjects, wo
 	if err := copyRuntimeAssets(runtime, buildDirPath); err != nil {
 		return err
 	}
+	if err := copyEntryAsset(runtime, buildDirPath); err != nil {
+		return err
+	}
+	if err := copyCronAsset(runtime, buildDirPath); err != nil {
+		return err
+	}
 	if err := copyCommonAssets(runtime, buildDirPath); err != nil {
 		return err
 	}
@@ -340,6 +349,47 @@ func copyRuntimeAssets(runtime Runtime, buildDirPath string) error {
 		return err
 	}
 	return nil
+}
+
+// copyEntryAsset copies the runtime's entry point file to "main.mjs" in the
+// build directory when the runtime provides one (e.g. Deno, whose entry point
+// calls Deno.serve). Runtimes that use worker.mjs as their entry point
+// (Cloudflare, browser) have no entry asset and are skipped.
+func copyEntryAsset(runtime Runtime, buildDirPath string) error {
+	originPath := path.Join(entryDirPath, string(runtime)+".mjs")
+	if _, err := assets.ReadFile(originPath); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	destPath := path.Join(buildDirPath, "main.mjs")
+	if err := copyFile(destPath, originPath); err != nil {
+		return err
+	}
+	return nil
+}
+
+// copyCronAsset writes crons.mjs into the build directory for the Deno
+// runtime: the project's own ./crons.mjs when it exists, otherwise the
+// stub asset. Deno Deploy discovers cron jobs by evaluating top-level
+// module code at deployment time, so Deno.cron declarations must live in a
+// top-level JS module — Go code, which only runs once a trigger boots the
+// Wasm instance, cannot register them. main.mjs always imports
+// ./crons.mjs, so the file must exist in the output either way.
+func copyCronAsset(runtime Runtime, buildDirPath string) error {
+	if runtime != RuntimeDeno {
+		return nil
+	}
+	destPath := path.Join(buildDirPath, "crons.mjs")
+	src, err := os.ReadFile("crons.mjs")
+	if err == nil {
+		return os.WriteFile(destPath, src, 0o644)
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return copyFile(destPath, path.Join(entryDirPath, "crons.mjs"))
 }
 
 func copyCommonAssets(runtime Runtime, buildDirPath string) error {

@@ -12,7 +12,8 @@
 * `-mode`
   - switch generated file depends on Go / TinyGo.
 * `-runtime`
-  - select the target runtime (`cloudflare`, `browser`, or `neon`; default: `cloudflare`).
+  - select the target runtime (`cloudflare`, `browser`, `deno`, or `neon`; default: `cloudflare`).
+  - `deno` also generates `main.mjs`, an entry point that serves the worker via `Deno.serve`.
 * `-o`
   - change output directory (default: `build`)
 * `-durable-objects`

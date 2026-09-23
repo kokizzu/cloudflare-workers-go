@@ -134,8 +134,8 @@ func TestToRequest(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ToRequest() error = %v, want nil", err)
 		}
-		if req.Body != nil {
-			t.Errorf("Body = %v, want nil", req.Body)
+		if req.Body != http.NoBody {
+			t.Errorf("Body = %v, want http.NoBody", req.Body)
 		}
 	})
 }
@@ -187,7 +187,7 @@ func TestToJSRequest(t *testing.T) {
 }
 
 func TestToBody_null(t *testing.T) {
-	if got := ToBody(jsutil.Null); got != nil {
-		t.Errorf("ToBody(null) = %v, want nil", got)
+	if got := ToBody(jsutil.Null); got != http.NoBody {
+		t.Errorf("ToBody(null) = %v, want http.NoBody", got)
 	}
 }

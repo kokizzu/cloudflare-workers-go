@@ -1,0 +1,17 @@
+{
+  "tasks": {
+    "build": "go run github.com/syumai/workers-go/cmd/workers-assets-gen -runtime=deno -mode=go && GOOS=js GOARCH=wasm go build -o ./build/app.wasm .",
+    "dev": "deno run --allow-net --allow-read --allow-env build/main.mjs",
+    "start": "deno task dev",
+    "deploy": "deno deploy"
+  },
+  "deploy": {
+    "org": "<TBD>",
+    "include": ["./build", "./deno.json"],
+    "runtime": {
+      "type": "dynamic",
+      "entrypoint": "build/main.mjs"
+    }
+  },
+  "unstable": ["kv", "cron"]
+}
