@@ -1,0 +1,25 @@
+---
+title: FAQ
+description: Frequently asked questions about workers-go.
+sidebar:
+  label: FAQ
+  order: 6
+---
+
+## How do I deploy a worker implemented in this package?
+
+To deploy a Worker, the following steps are required.
+
+- Create a worker project using [wrangler](https://developers.cloudflare.com/workers/wrangler/).
+- Build a Wasm binary.
+- Upload the Wasm binary with JavaScript code to load and instantiate it (the entry point).
+
+The [worker-go template](https://github.com/syumai/workers-go/tree/main/_templates/cloudflare/worker-go) contains all the required files, so using this template is recommended — see the [Quickstart](/quickstart).
+
+For a smaller Wasm binary, use the [worker-tinygo template](https://github.com/syumai/workers-go/tree/main/_templates/cloudflare/worker-tinygo) instead. It requires TinyGo 0.42.0 or later — TinyGo 0.41.x cannot build `net/http` for Wasm (see [tinygo-org/tinygo#5350](https://github.com/tinygo-org/tinygo/issues/5350)).
+
+To host a Go type as a [Durable Object](https://developers.cloudflare.com/durable-objects/), use the [`durable-object-go` template](https://github.com/syumai/workers-go/tree/main/_templates/cloudflare/durable-object-go) instead — see [Durable Objects](/cloudflare/durable-objects).
+
+## Where can I discuss contributions, or ask questions about how to use the library?
+
+You can do both through GitHub Issues. For a more casual conversation, use the [Discord server](https://discord.gg/tYhtatRqGs).
