@@ -1,0 +1,16 @@
+name = "tail-worker"
+main = "./build/worker.mjs"
+compatibility_date = "2024-01-03"
+
+# There is no wrangler.toml key on *this* Worker for the tail trigger this
+# Worker's tail(events, env, ctx) handler (main.go's tail.Handle) responds
+# to. Instead, add a `tail_consumers` entry to the *producer* Worker's own
+# wrangler.toml (the Worker whose execution you want to observe), pointing
+# at this Worker's name:
+#
+#   tail_consumers = [{ service = "tail-worker" }]
+#
+# - see: https://developers.cloudflare.com/workers/observability/logs/tail-workers/
+
+[build]
+command = "make build"

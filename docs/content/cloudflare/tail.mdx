@@ -1,0 +1,60 @@
+---
+title: Tail Workers
+description: Consume another Worker's execution traces from Go with a Tail Worker.
+sidebar:
+  badge: Experimental
+---
+
+A [Tail Worker](https://developers.cloudflare.com/workers/observability/logs/tail-workers/) receives a batch of trace events for every invocation of a "producer" Worker. The `exp/cloudflare/tail` package registers the worker's `tail(events, env, ctx)` handler and decodes each `TraceItem`.
+
+:::warning[Experimental]
+The `exp/cloudflare/tail` package lives under `exp/cloudflare` and is experimental. Its API is likely to change.
+:::
+
+## Point a producer at the tail worker
+
+There is no trigger key in the tail worker's own wrangler.toml. Instead, add a `tail_consumers` entry to the *producer* worker's wrangler.toml, naming the tail worker's service:
+
+```toml
+tail_consumers = [{ service = "tail-worker" }]
+```
+
+## Handle trace events
+
+`tail.Handle` registers a `func([]tail.TraceItem) error` and blocks. Each `TraceItem` describes one producer invocation — `ScriptName`, `Outcome`, `ExecutionModel`, `CpuTime`, `WallTime`, plus `Logs` (`[]TraceLog`) and `Exceptions` (`[]TraceException`).
+
+```go
+func main() {
+	tail.Handle(func(items []tail.TraceItem) error {
+		for _, item := range items {
+			log.Printf("script=%s outcome=%s cpu=%.2fms wall=%.2fms",
+				item.ScriptName, item.Outcome, item.CpuTime, item.WallTime)
+
+			switch item.EventKind() {
+			case "fetch":
+				if fe, ok := item.FetchEvent(); ok {
+					log.Printf("fetch %s %s", fe.Request.Method(), fe.Request.URL())
+				}
+			case "scheduled":
+				if se, ok := item.ScheduledEvent(); ok {
+					log.Printf("cron=%q", se.Cron)
+				}
+			case "queue":
+				if qe, ok := item.QueueEvent(); ok {
+					log.Printf("queue=%s batchSize=%d", qe.Queue, int(qe.BatchSize))
+				}
+			}
+		}
+		return nil
+	})
+}
+```
+
+- `item.Event` is a discriminated union left as a `js.Value`. `item.EventKind()` infers the branch — `"fetch"`, `"jsrpc"`, `"scheduled"`, `"alarm"`, `"queue"`, `"email"`, `"tail"`, or `"hibernatableWebSocket"` — and the matching typed accessor (`FetchEvent()`, `ScheduledEvent()`, `AlarmEvent()`, `QueueEvent()`, `EmailEvent()`, `TailEvent()`, `JsRpcEvent()`, `HibernatableWebSocketEvent()`) returns `(*T, bool)`. `connect` and `custom` events carry no distinguishing properties, so they (and anything unrecognized) report `EventKind() == ""`.
+- `item.EventTime()` decodes `EventTimestamp` (Unix ms) as a `time.Time`; a timestamp of `0` is reported as absent.
+- Returning an error logs the rejection but does not retry delivery.
+- `Handle` blocks; a worker that also serves other triggers should register those first and call a single blocking entry point such as `workers.Serve` instead.
+
+## Example project
+
+[_examples/tail-worker](https://github.com/syumai/workers-go/tree/main/_examples/tail-worker) logs a summary of every trace event it receives.

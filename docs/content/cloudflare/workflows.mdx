@@ -1,0 +1,156 @@
+---
+title: Workflows
+description: Create and manage Cloudflare Workflows instances from Go.
+sidebar:
+  badge: Experimental
+---
+
+[Cloudflare Workflows](https://developers.cloudflare.com/workflows/) run durable, multi-step tasks. The `exp/cloudflare/workflows` package covers both sides: the `Workflow`/`WorkflowInstance` binding for creating, getting, and controlling instances from a Go worker, and hosting a Go type's `run()` as the Workflow's own `WorkflowEntrypoint`.
+
+:::warning[Experimental]
+The `exp/cloudflare/workflows` package lives under `exp/cloudflare` and is experimental. Its API is likely to change.
+:::
+
+## Implement a Workflow in Go
+
+A Workflow class is a `Runner` — a function of `(ctx, event, step)` — registered by name with `workflows.Register`, before `workers.Serve` (or any other blocking call). Unlike a Durable Object, a `WorkflowEntrypoint` doesn't need to keep in-memory state alive between invocations: Workflows persists step results and durably replays `run()` on its own, so a Runner should not rely on Go variables surviving from one `run()` invocation to the next. (The shim still boots the Wasm module once per `WorkflowEntrypoint` instance and reuses it if the runtime calls `run()` on the same instance again.)
+
+```go
+import (
+	"context"
+	"syscall/js"
+	"time"
+
+	"github.com/syumai/workers-go/exp/cloudflare/workflows"
+)
+
+// step1Result is step "generate-message"'s JSON result.
+type step1Result struct {
+	Message string `json:"message"`
+}
+
+func runMyWorkflow(ctx context.Context, event *workflows.Event, step *workflows.Step) (js.Value, error) {
+	step1, err := workflows.DoJSON(step, "generate-message", func(ctx context.Context) (step1Result, error) {
+		return step1Result{Message: "hello from step 1"}, nil
+	})
+	if err != nil {
+		return js.Value{}, err
+	}
+
+	if err := step.Sleep("wait-a-bit", time.Second); err != nil {
+		return js.Value{}, err
+	}
+
+	return workflows.ResultJSON(map[string]any{"step1": step1})
+}
+
+func main() {
+	workflows.Register("MyWorkflow", runMyWorkflow)
+
+	http.HandleFunc("/", handleIndex)
+	workers.Serve(nil)
+}
+```
+
+`event.Payload` is a raw, structured-clonable `js.Value`; `event.PayloadJSON(&v)` decodes it into a typed Go value the same way `WorkflowInstance.SendEvent` encodes one on the caller side.
+
+### Steps
+
+`*workflows.Step` wraps the JS `WorkflowStep` passed into `run()`:
+
+- `Do(name, fn)` / `DoWithConfig(name, cfg, fn)` run `fn` under step `name`; `fn` only runs if that step hasn't already completed for this Workflow instance — on a retry/replay, Workflows returns the saved result instead of calling it again. `DoJSON`/`DoJSONWithConfig` are generic helpers that JSON-encode/decode a step's result instead of working with a raw `js.Value`, the same way `durableobjects.DurableObjectStorage.GetJSON`/`PutJSON` do.
+- `Sleep(name, d)` / `SleepUntil(name, t)` pause the Workflow durably — it survives a restart/eviction of the underlying Wasm instance.
+- `WaitForEvent(name, eventType, timeout)` waits for an event sent to this instance (e.g. via `WorkflowInstance.SendEvent`) and returns a `*StepEvent`.
+
+`StepConfig` (passed to `DoWithConfig`/`DoJSONWithConfig`) sets `Retries` (a `*RetryConfig` — `Limit`, `Delay`, `Backoff`), `Timeout`, and `Sensitive`. Wrap a step's (or the Runner's) returned error with `workflows.NonRetryable(err)` to fail the Workflow instance permanently instead of letting Workflows retry it.
+
+### Build and wiring
+
+Pass `-workflows` to `workers-assets-gen` (comma-separate multiple classes):
+
+```sh
+go run github.com/syumai/workers-go/cmd/workers-assets-gen -mode=go -workflows=MyWorkflow
+```
+
+This appends one subclass per name to the generated `worker.mjs`:
+
+```js
+export class MyWorkflow extends GoWorkflowEntrypoint { static goClassName = "MyWorkflow"; }
+```
+
+The name passed here, the `class_name` in `wrangler.toml`'s `[[workflows]]` (below), and the `className` given to `workflows.Register` must all match exactly. Hosting a Workflow and calling into one (below) are independent — a Worker can do either, both, or neither.
+
+## Declare the binding
+
+```toml
+[[workflows]]
+name = "my-workflow"
+binding = "MY_WORKFLOW"
+class_name = "MyWorkflow"
+```
+
+## Create and get instances
+
+`workflows.NewWorkflow` resolves the binding by name. `Create` starts a new instance (an existing `id` is an error); `Get` returns a handle to a running one.
+
+```go
+wf, err := workflows.NewWorkflow("MY_WORKFLOW")
+if err != nil {
+	return err
+}
+
+inst, err := wf.Create(workflows.WorkflowInstanceCreateOptions{
+	ID:     "order-123",
+	Params: js.ValueOf(map[string]any{"orderId": 123}),
+})
+if err != nil {
+	return err
+}
+fmt.Println(inst.ID())
+
+same, err := wf.Get("order-123")
+```
+
+`WorkflowInstanceCreateOptions` also accepts a `*WorkflowInstanceCreateOptionsRetention` and a `LocationHint` (one of the `WorkflowInstanceLocationHint*` constants). `Params` is passed through as a `js.Value`.
+
+## Control an instance
+
+```go
+status, err := inst.Status() // InstanceStatus{Status, Error, Output}
+
+err = inst.SendEvent(workflows.WorkflowInstanceSendEventEvent{
+	Type:    "approval",
+	Payload: js.ValueOf(map[string]any{"approved": true}),
+})
+
+err = inst.Pause()
+err = inst.Resume()
+err = inst.Restart(workflows.WorkflowInstanceRestartOptions{
+	From: &workflows.WorkflowInstanceRestartOptionsFrom{Name: "step-name"},
+})
+err = inst.Terminate(workflows.WorkflowInstanceTerminateOptions{Rollback: true})
+err = inst.Delete()
+```
+
+## Batch operations
+
+`CreateBatch` starts up to 100 instances at once; `DeleteBatch` deletes up to 100 and reports per-instance results.
+
+```go
+instances, err := wf.CreateBatch([]workflows.WorkflowInstanceCreateOptions{
+	{ID: "a"},
+	{ID: "b"},
+})
+
+res, err := wf.DeleteBatch([]string{"a", "b"})
+for _, d := range res.Deleted {
+	fmt.Println("deleted", d.ID)
+}
+for _, e := range res.Errors {
+	fmt.Println("failed", e.ID, e.Message)
+}
+```
+
+## Example project
+
+[_examples/workflow-go](https://github.com/syumai/workers-go/tree/main/_examples/workflow-go) hosts a `MyWorkflow` Workflow with two steps and a sleep, plus a regular HTTP handler that creates and inspects instances of it.

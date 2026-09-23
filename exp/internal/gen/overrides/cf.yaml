@@ -1,0 +1,81 @@
+package: cf
+doc: |
+  Package cf provides IncomingRequestCfProperties, the metadata
+  Cloudflare's edge attaches to a request (available on the underlying
+  Fetch API Request as `request.cf`). These are pure data types: there is
+  no JS handle object involved, only fromJS decoding, so this package has
+  no bindings.
+
+  In the .d.ts source, IncomingRequestCfProperties is assembled as a
+  TypeScript intersection of several smaller interfaces (which themselves
+  use `extends`). cfgen flattens that composition into one Go struct, so
+  every field is reachable directly off IncomingRequestCfProperties. Each
+  constituent interface is also generated standalone below, for callers
+  that only have one piece (e.g. a bot management report) in hand.
+
+  FromRequest and FromJS, which decode a *http.Request / raw js.Value into
+  an IncomingRequestCfProperties, are hand-written in cf.go.
+include:
+  - IncomingRequestCfProperties
+  - IncomingRequestCfPropertiesBase
+  - IncomingRequestCfPropertiesBotManagement
+  - IncomingRequestCfPropertiesBotManagementBase
+  - IncomingRequestCfPropertiesBotManagementEnterprise
+  - IncomingRequestCfPropertiesTLSClientAuth
+  - IncomingRequestCfPropertiesTLSClientAuthPlaceholder
+  - IncomingRequestCfPropertiesGeographicInformation
+  - IncomingRequestCfPropertiesCloudflareForSaaSEnterprise
+  - IncomingRequestCfPropertiesCloudflareAccessOrApiShield
+  - IncomingRequestCfPropertiesExportedAuthenticatorMetadata
+  - IncomingRequestCfPropertiesEdgeRequestKeepAliveStatus
+  - ContinentCode
+types:
+  # A union of the integer literals 0-5 with no named meaning per value in
+  # the .d.ts source (unlike e.g. InstanceStatus's string-literal union),
+  # so a plain int is a more useful mapping than the js.Value fallback
+  # cfgen would otherwise pick for a non-string-literal union.
+  IncomingRequestCfPropertiesEdgeRequestKeepAliveStatus: "int"
+  # country is (Iso3166Alpha2Code | "T1") in the .d.ts source: a big
+  # string-literal-union alias for the real country codes, plus the
+  # literal "T1" Cloudflare uses for Tor exit nodes. cfgen's union rules
+  # don't cover "ref-to-enum | literal" mixes (only literal/literal and
+  # literal/plain-prim mixes), and Iso3166Alpha2Code isn't otherwise
+  # useful enough on its own to add to include just for this, so this is
+  # left a plain string (still lets a caller compare against "T1"
+  # directly).
+  IncomingRequestCfProperties.country: "string"
+  IncomingRequestCfPropertiesGeographicInformation.country: "string"
+  # tlsClientAuth is (IncomingRequestCfPropertiesTLSClientAuth |
+  # IncomingRequestCfPropertiesTLSClientAuthPlaceholder): both are
+  # included and data-shaped, but the object-literal-union merge rule
+  # still can't unify them, since almost every field's type genuinely
+  # differs between the two variants (a plain string vs. an all-caps
+  # string *literal* placeholder, e.g. certIssuerDN: string vs.
+  # certIssuerDN: ""). Left as js.Value; the caller distinguishes the two
+  # shapes at the JS level via certPresented ("1" vs "0") the same way the
+  # upstream .d.ts's own discriminated union does.
+  IncomingRequestCfProperties.tlsClientAuth: "js.Value"
+  IncomingRequestCfPropertiesCloudflareAccessOrApiShield.tlsClientAuth: "js.Value"
+  # certVerified is Exclude<CertVerificationStatus, "NONE"> in the .d.ts
+  # source; extract.ts doesn't special-case the Exclude<T, U> utility type
+  # (it isn't a real declaration, so it round-trips as an unresolvable
+  # ref named "Exclude"), and CertVerificationStatus isn't in this
+  # package's include list. Left a plain string; CertVerificationStatus's
+  # possible values are all Cloudflare-defined string constants documented
+  # upstream, not enumerated here.
+  IncomingRequestCfPropertiesTLSClientAuth.certVerified: "string"
+  # botManagement is (IncomingRequestCfPropertiesBotManagementBase |
+  # IncomingRequestCfPropertiesBotManagementEnterpriseBotManagement) after
+  # extends-flattening: the flattened top-level type picks up whichever
+  # constituent interface's own "botManagement" member is merged in last
+  # (IncomingRequestCfPropertiesBotManagementEnterprise's own inline
+  # intersection type, which itself resolves and synthesizes fine via 5.1
+  # item 1's Pick/Omit-aware flattening) — but that operand's own
+  # "botManagement" happens not to be marked optional even though a
+  # request without the Bot Management add-on genuinely won't have it,
+  # causing an unconditional (and thus panicking on a real, Enterprise-
+  # add-on-less response) v.Get("botManagement") decode. Left as js.Value
+  # (the pre-item-1 fallback for an unresolvable intersection) rather than
+  # risk that; a caller can still reach the always-safe standalone
+  # IncomingRequestCfPropertiesBotManagement.BotManagement getter/field.
+  IncomingRequestCfProperties.botManagement: "js.Value"

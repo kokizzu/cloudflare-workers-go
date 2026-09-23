@@ -31,27 +31,9 @@ func ChainMiddlewares(middlewares ...Middleware) Middleware {
 }
 
 func init() {
-	runHonoMiddlewareCallback := js.FuncOf(func(_ js.Value, args []js.Value) any {
-		if len(args) > 1 {
-			panic(fmt.Errorf("too many args given to handleRequest: %d", len(args)))
-		}
-		nextFnObj := args[0]
-		var cb js.Func
-		cb = js.FuncOf(func(_ js.Value, pArgs []js.Value) any {
-			defer cb.Release()
-			resolve := pArgs[0]
-			go func() {
-				err := runHonoMiddleware(nextFnObj)
-				if err != nil {
-					panic(err)
-				}
-				resolve.Invoke(js.Undefined())
-			}()
-			return js.Undefined()
-		})
-		return jsutil.NewPromise(cb)
+	jsutil.RegisterAsyncHandler("runHonoMiddleware", 1, func(args []js.Value) (js.Value, error) {
+		return js.Undefined(), runHonoMiddleware(args[0])
 	})
-	jsutil.Binding.Set("runHonoMiddleware", runHonoMiddlewareCallback)
 }
 
 func runHonoMiddleware(nextFnObj js.Value) error {
@@ -59,11 +41,18 @@ func runHonoMiddleware(nextFnObj js.Value) error {
 		return fmt.Errorf("ServeMiddleware must be called before runHonoMiddleware.")
 	}
 	c := newContext(jsutil.RuntimeContext.Get("ctx"))
+	var nextErr error
 	next := func() {
-		jsutil.AwaitPromise(nextFnObj.Invoke())
+		// A rejected next() is captured rather than dropped so that the
+		// Middleware signature stays compatible; runHonoMiddleware
+		// returns the error after the middleware finishes, which rejects
+		// the Promise returned to the JS side.
+		if _, err := jsutil.AwaitPromise(nextFnObj.Invoke()); err != nil {
+			nextErr = err
+		}
 	}
 	middleware(c, next)
-	return nil
+	return nextErr
 }
 
 //go:wasmimport workers ready

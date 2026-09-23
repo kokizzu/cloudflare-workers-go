@@ -1,0 +1,37 @@
+---
+title: FetchEvent
+description: Extend the lifetime of a fetch event with waitUntil and passThroughOnException.
+---
+
+The `cloudflare` package exposes two [FetchEvent](https://developers.cloudflare.com/workers/runtime-apis/fetch-event/) lifecycle methods.
+
+## WaitUntil
+
+`cloudflare.WaitUntil` keeps the worker alive after the response has been sent. Use it for logging, analytics, cache writes, and other work that should not delay the client.
+
+```go
+func handler(w http.ResponseWriter, req *http.Request) {
+	cloudflare.WaitUntil(func() {
+		// runs after the response is returned
+		writeAnalytics(req)
+	})
+	w.Write([]byte("ok"))
+}
+```
+
+`WaitUntil` accepts a synchronous `func()` — run slow work inside it, and the Workers runtime waits for it to finish before terminating the invocation.
+
+## PassThroughOnException
+
+`cloudflare.PassThroughOnException` forwards the request to the origin server when the worker throws an unhandled exception, instead of returning a runtime error response. It needs a route or custom domain configured on the worker.
+
+```go
+func handler(w http.ResponseWriter, req *http.Request) {
+	cloudflare.PassThroughOnException()
+	// if this handler panics, the request goes to the origin
+}
+```
+
+## Example project
+
+[_examples/fetch-event](https://github.com/syumai/workers-go/tree/main/_examples/fetch-event) combines both methods with a reverse proxy.

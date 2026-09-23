@@ -9,40 +9,177 @@ on:
 
 jobs:
   ci:
-    strategy:
-      matrix:
-        go-version: [ 1.21.3 ]
-        os: [ ubuntu-latest ]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Setup Golang
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version-file: go.mod
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
 
       - name: Test
         shell: bash
+        run: make test
+
+  test-host:
+    name: Test (host)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Golang
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test (host)
+        shell: bash
+        run: make test-host
+
+  check-generated:
+    name: Check generated files
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Golang
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: scripts/gen-wasm-exec/package.json
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install gen-wasm-exec dependencies
+        working-directory: scripts/gen-wasm-exec
+        run: pnpm install --frozen-lockfile
+
+      - name: Check generated files
+        shell: bash
+        run: make check-generated
+
+  e2e:
+    name: E2E (wrangler)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Golang
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: e2e/package.json
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install e2e dependencies
+        working-directory: e2e
+        run: pnpm install --frozen-lockfile
+
+      - name: Test (e2e)
+        shell: bash
+        run: make test-e2e
+
+      # scripts/gen-bindings is a separate Go module (kept out of the main
+      # module's go.sum), so `go test ./...` above doesn't cover it.
+      - name: Test cfgen (scripts/gen-bindings)
+        shell: bash
+        working-directory: scripts/gen-bindings
         run: |
-          PATH=$PWD/testdata/wasm:$PATH GOOS=js GOARCH=wasm go test ./...
+          go test ./...
+          go vet ./...
+
+      # Verifies exp/cloudflare/<pkg>/z<pkg>_gen.go is what cfgen would
+      # produce from the committed IR (scripts/gen-bindings/ir/index.json) and
+      # overrides (exp/internal/gen/overrides/*.yaml) right now. This does
+      # NOT re-run the `extract` step (see gen-bindings-extract in the
+      # Makefile), so it needs no Node/pnpm toolchain — only a stale commit
+      # of the generated Go files themselves fails it.
+      - name: Check generated Cloudflare bindings are up to date
+        shell: bash
+        run: make gen-bindings-check
 
   examples:
     name: Build examples
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Setup Golang
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version-file: go.mod
 
       - name: Build examples
         shell: bash
         run: make build-examples
+
+  tinygo:
+    name: Build TinyGo templates and examples
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      # TinyGo 0.42 requires Go 1.25 through 1.27, so this job uses the
+      # Makefile's GO_VERSION rather than the module's minimum Go version.
+      - name: Setup Golang
+        uses: actions/setup-go@v4
+        with:
+          go-version: 1.27.1
+
+      - name: Setup TinyGo
+        uses: acifani/setup-tinygo@v3
+        with:
+          # Keep in sync with the Makefile's TINYGO_VERSION.
+          tinygo-version: 0.42.0
+
+      # Each of these directories has no go.mod of its own except the
+      # _examples ones (which replace github.com/syumai/workers-go with
+      # "../.."); the two _templates ones resolve against the repo's own
+      # root go.mod instead, the same way `tinygo build` works when run
+      # from inside them locally.
+      - name: Build TinyGo templates and examples
+        shell: bash
+        run: |
+          set -e
+          for dir in \
+            _templates/cloudflare/worker-tinygo \
+            _templates/cloudflare/cron-tinygo \
+            _examples/kv-counter \
+            _examples/durable-object-websocket \
+            _examples/email-forward \
+          ; do
+            echo "tinygo build: $dir"
+            (cd "$dir" && tinygo build -target wasm -no-debug -o /dev/null .)
+          done
 
   mirror-compat:
     name: Mirror compatibility check
@@ -136,4 +273,3 @@ jobs:
         run: |
           echo "::error::This PR removes or changes exported symbols that the syumai/workers mirror forwards. Add the 'breaking' label to acknowledge that the mirror will drop/change these symbols on the next sync, or restore compatibility instead."
           exit 1
-

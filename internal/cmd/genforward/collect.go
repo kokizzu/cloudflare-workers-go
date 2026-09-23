@@ -25,6 +25,13 @@ const (
 type symbol struct {
 	name string
 	kind symbolKind
+
+	// genFunc is non-nil when kind == kindFunc and the function is generic.
+	// A generic function can't be forwarded with `var F = src.F` (a var
+	// can't carry type parameters), so writeForwardFile instead renders a
+	// type-parameterized wrapper function from genFunc's signature; see
+	// renderGenericFuncWrapper in gen.go.
+	genFunc *types.Func
 }
 
 // pkgInfo describes one source package and the forwarding files genforward
@@ -235,9 +242,13 @@ func exportedNames(scope *types.Scope) []string {
 
 // symbolFor classifies the exported object named name in pkg, and enforces
 // the constraints genforward requires to emit a valid forwarder:
-//   - functions must not be generic (the codebase is expected to have none).
 //   - types must not be generic (plain `type X = src.X` aliases can't carry
-//     type parameters).
+//     type parameters; the module's go 1.21 directive also predates Go's
+//     support for generic type aliases, so there's no other spelling
+//     available here either).
+//   - a generic function is forwarded as a type-parameterized wrapper
+//     function instead of `var F = src.F` (see genFunc on symbol, and
+//     renderGenericFuncWrapper in gen.go).
 func symbolFor(pkg *packages.Package, name string) (symbol, error) {
 	obj := pkg.Types.Scope().Lookup(name)
 	if obj == nil {
@@ -245,6 +256,7 @@ func symbolFor(pkg *packages.Package, name string) (symbol, error) {
 	}
 
 	var kind symbolKind
+	var genFunc *types.Func
 	switch o := obj.(type) {
 	case *types.TypeName:
 		kind = kindType
@@ -254,7 +266,7 @@ func symbolFor(pkg *packages.Package, name string) (symbol, error) {
 	case *types.Func:
 		kind = kindFunc
 		if sig, ok := o.Type().(*types.Signature); ok && sig.TypeParams().Len() > 0 {
-			return symbol{}, fmt.Errorf("func %s has type parameters; genforward does not support forwarding generic functions", name)
+			genFunc = o
 		}
 	case *types.Const:
 		kind = kindConst
@@ -264,7 +276,7 @@ func symbolFor(pkg *packages.Package, name string) (symbol, error) {
 		return symbol{}, fmt.Errorf("symbol %s has unsupported object kind %T", name, obj)
 	}
 
-	return symbol{name: name, kind: kind}, nil
+	return symbol{name: name, kind: kind, genFunc: genFunc}, nil
 }
 
 // isInternalRelDir reports whether relDir (a package directory path relative

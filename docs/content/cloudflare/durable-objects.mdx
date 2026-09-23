@@ -1,0 +1,160 @@
+---
+title: Durable Objects
+description: Host a Go type as a Durable Object class, and call Durable Object stubs from a Go worker.
+sidebar:
+  badge: Experimental
+---
+
+:::warning[Experimental]
+Hosting is supported via `exp/cloudflare/durableobjects`, which lives under `exp/` and is experimental — its API may change. Calling stubs (`cloudflare.NewDurableObjectNamespace`, below) works independently of it.
+:::
+
+## Implement a Durable Object in Go
+
+A Durable Object class is a Go type that implements `durableobjects.Object` — which is just `http.Handler`. Its `ServeHTTP` handles the object's `fetch()` trigger.
+
+```go
+import "github.com/syumai/workers-go/exp/cloudflare/durableobjects"
+
+type Counter struct {
+	state *durableobjects.DurableObjectState
+}
+
+func (c *Counter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	storage := c.state.Storage()
+	// ...
+}
+```
+
+Register a constructor in `main`, before `workers.Serve` (or any other blocking call). A Worker can host Durable Objects and serve regular HTTP traffic from the same binary.
+
+```go
+func main() {
+	durableobjects.Register("Counter", func(state *durableobjects.DurableObjectState, env js.Value) (durableobjects.Object, error) {
+		return &Counter{state: state}, nil
+	})
+
+	workers.Serve(nil)
+}
+```
+
+Unlike fetch handlers — which boot a new Wasm instance per request — a Durable Object keeps **one Wasm instance alive for the object's whole lifetime**, so the constructor runs once per instance and in-memory Go state survives across triggers. `durableobjects.State()` also returns the current instance's `*DurableObjectState` from anywhere in a handler's call graph.
+
+### Optional trigger handlers
+
+Implement these interfaces on the same type to receive the corresponding triggers — each is dispatched only if implemented; a trigger for one you didn't implement rejects with an error:
+
+- `durableobjects.AlarmHandler` — `Alarm(ctx, info)` for the `alarm()` trigger; schedule with `storage.SetAlarm`.
+- `durableobjects.WebSocketMessageHandler` / `WebSocketCloseHandler` / `WebSocketErrorHandler` — hibernatable WebSocket triggers; accept connections in `ServeHTTP` with `state.AcceptHibernatingConn`.
+
+### Storage
+
+`state.Storage()` returns `*DurableObjectStorage`, which wraps the Durable Object storage API. Typed helpers include `GetString`/`PutString`, `GetJSON`/`PutJSON`, `SetAlarm`, and `SQL()`:
+
+```go
+var count int
+if _, err := storage.GetJSON("count", &count); err != nil {
+	return err
+}
+count++
+if err := storage.PutJSON("count", count); err != nil {
+	return err
+}
+```
+
+The generated bindings also expose `GetMultiple(keys, options)`/`PutMultiple(entries, options)` for batch reads/writes, `List(options)` for a range scan, and `Alarm()` (a typed helper reading back the currently scheduled alarm time). `Transaction(func(txn *DurableObjectTransaction) (js.Value, error))` runs a closure against a `DurableObjectTransaction` — with the same `Get`/`Put`/`Delete`/`GetMultiple`/`PutMultiple`/`List` methods as storage itself, plus `Rollback` — committing automatically unless the closure errors or calls `Rollback`. `BlockConcurrencyWhile(func() (js.Value, error))` (on `*DurableObjectState`) runs a closure exclusively, deferring all other events to this object until it completes.
+
+### SQL storage with `database/sql`
+
+`state.Storage().SQL()` returns a `*SQLStorage` wrapping the Durable Object's embedded [SQLite database](https://developers.cloudflare.com/durable-objects/api/sql-storage/). `OpenDB()` returns a `*sql.DB` for it — placeholders are `?`, bind values must be `string`/`int64`/`float64`/`bool`/`[]byte`/`nil`/`time.Time` (encoded as RFC 3339), and transactions (`Begin`/`BeginTx`) are not currently supported.
+
+```go
+db := state.Storage().SQL().OpenDB()
+defer db.Close()
+
+_, err := db.Exec(`INSERT INTO todos (title) VALUES (?)`, title)
+```
+
+For direct access without `database/sql`, `SQLStorage.Exec(query string, bindings ...any) (*SQLStorageCursor, error)` runs a statement and returns a cursor; `cursor.Rows()` decodes its remaining rows into `[]map[string]any`.
+
+```go
+cursor, err := state.Storage().SQL().Exec(`SELECT id, title FROM todos WHERE done = ?`, false)
+if err != nil {
+	return err
+}
+rows, err := cursor.Rows()
+```
+
+## Build and wiring
+
+Pass `-durable-objects` to `workers-assets-gen` (comma-separate multiple classes):
+
+```sh
+go run github.com/syumai/workers-go/cmd/workers-assets-gen -mode=go -durable-objects=Counter
+```
+
+This appends one subclass per name to the generated `worker.mjs`:
+
+```js
+export class Counter extends GoDurableObject { static goClassName = "Counter"; }
+```
+
+Then declare the binding and a migration in `wrangler.toml`:
+
+```toml
+[[durable_objects.bindings]]
+name = "COUNTER"
+class_name = "Counter"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Counter"]
+```
+
+The class name passed to `-durable-objects`, `wrangler.toml`'s `class_name`, and `durableobjects.Register` must all match exactly.
+
+For a ready-made project layout, start from the template:
+
+```sh
+npm create cloudflare@latest -- --template github.com/syumai/workers-go/_templates/cloudflare/durable-object-go
+```
+
+## Call a stub
+
+A Worker that only calls a Durable Object still needs a `durable_objects` binding for the class. Resolve the namespace, derive an ID with `IdFromName`, get the stub, and call `Fetch` with an ordinary `*http.Request`.
+
+```go
+ns, err := cloudflare.NewDurableObjectNamespace("COUNTER")
+if err != nil {
+	panic(err) // no binding named COUNTER
+}
+
+id := ns.IdFromName("A")
+stub, err := ns.Get(id)
+if err != nil {
+	panic(err)
+}
+
+res, err := stub.Fetch(req)
+if err != nil {
+	panic(err)
+}
+defer res.Body.Close()
+count, err := io.ReadAll(res.Body)
+```
+
+The request is forwarded as-is, so the Durable Object sees the same method, path, headers, and body.
+
+`stub.RPC()` returns an [`*rpc.Stub`](/cloudflare/rpc) for calling one of the Durable Object's own methods beyond `fetch()` — Durable Objects support Workers RPC the same way a named `WorkerEntrypoint` reached over a Service binding does:
+
+```go
+var count int
+err = stub.RPC().CallJSON("increment", &count, 1)
+```
+
+To forward a WebSocket upgrade request to a Durable Object that accepts it (via `websocket.Upgrade`/`UpgradeHibernating` inside `ServeHTTP`), use `stub.FetchWebSocket(w, r)` instead of `stub.Fetch` — see [WebSocket](/cloudflare/websocket) for the full hibernation flow.
+
+## Example projects
+
+- [_examples/durable-object-go](https://github.com/syumai/workers-go/tree/main/_examples/durable-object-go) hosts a Go `Counter` Durable Object class (with an alarm) and forwards requests to it from a regular HTTP handler.
+- [_examples/durable-object-counter](https://github.com/syumai/workers-go/tree/main/_examples/durable-object-counter) forwards requests to a JavaScript counter object.

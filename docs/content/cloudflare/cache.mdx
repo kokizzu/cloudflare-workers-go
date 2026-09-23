@@ -1,0 +1,56 @@
+---
+title: Cache API
+description: Cache HTTP responses in the Cloudflare data center with the Cache API.
+---
+
+The [Cache API](https://developers.cloudflare.com/workers/runtime-apis/cache/) stores `Response` objects keyed by `Request` in the data center where your worker runs. The `cloudflare/cache` package maps it to `*http.Request` and `*http.Response`.
+
+## Match a cached response
+
+`Match` returns the cached response for the request, or `cache.ErrCacheNotFound`.
+
+```go
+c := cache.New()
+res, err := c.Match(req, nil)
+if errors.Is(err, cache.ErrCacheNotFound) {
+	// no cache — produce the response yourself
+}
+if res != nil {
+	io.Copy(w, res.Body)
+	return
+}
+```
+
+`MatchOptions.IgnoreMethod` treats the request as a GET regardless of its actual method.
+
+## Put a response into the cache
+
+`Put` stores a response. It is typically called inside `cloudflare.WaitUntil` so the response can be returned to the client first.
+
+```go
+cloudflare.WaitUntil(func() {
+	if err := c.Put(req, rw.ToHTTPResponse()); err != nil {
+		fmt.Println(err)
+	}
+})
+```
+
+The response must carry a `Cache-Control` header for it to be stored — for example `max-age=15`.
+
+## Delete a cached response
+
+```go
+err := c.Delete(req, &cache.DeleteOptions{IgnoreMethod: true})
+```
+
+## Named caches
+
+Pass `cache.WithNamespace` to use a named cache instead of the default.
+
+```go
+c := cache.New(cache.WithNamespace("my-cache"))
+```
+
+## Example project
+
+[_examples/cache](https://github.com/syumai/workers-go/tree/main/_examples/cache) caches a timestamped response for 15 seconds.

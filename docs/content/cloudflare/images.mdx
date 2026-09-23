@@ -1,0 +1,84 @@
+---
+title: Images
+description: Transform and optimize images with the Cloudflare Images binding.
+sidebar:
+  badge: Experimental
+---
+
+The [Images binding](https://developers.cloudflare.com/images/optimization/binding/) optimizes and manipulates images directly in a Worker — resize, transform, overlay, and re-encode raw image bytes from any source, including a request body, R2, or a `fetch` response. The `exp/cloudflare/images` package wraps it.
+
+:::warning[Experimental]
+This package lives under `exp/cloudflare` and its API may change.
+:::
+
+## Declare the binding
+
+```toml
+[images]
+binding = "IMAGES"
+```
+
+## Resolve the binding
+
+`images.NewImagesBinding` resolves the binding by name and returns an error when no binding with that name exists.
+
+```go
+import "github.com/syumai/workers-go/exp/cloudflare/images"
+
+img, err := images.NewImagesBinding("IMAGES")
+if err != nil {
+	// no binding named IMAGES
+}
+```
+
+## Transform an image
+
+`Input` takes the image bytes as an `io.Reader` and returns an `*ImageTransformer`. Chain `Transform` calls, then `Output` picks the output format and returns an `*ImageTransformationResult`.
+
+```go
+transformer, err := img.Input(req.Body, images.ImageInputOptions{})
+if err != nil {
+	return nil, err
+}
+transformer, err = transformer.Transform(images.ImageTransform{
+	Width:  300,
+	Height: 300,
+	Fit:    "cover",
+})
+if err != nil {
+	return nil, err
+}
+result, err := transformer.Output(images.ImageOutputOptions{Format: "image/avif"})
+if err != nil {
+	return nil, err
+}
+```
+
+`ImageTransform` also supports `Blur`, `Brightness`, `Contrast`, `Gamma`, `Rotate`, `Saturation`, `Sharpen`, `Flip`, `Gravity`, `Border`, and more.
+
+`Draw` overlays a second image — e.g. a watermark read from R2 — at a given position. `Composite` selects the compositing mode (`images.ImageCompositeModeOver` and friends).
+
+```go
+transformer, err = transformer.Draw(watermark, images.ImageDrawOptions{
+	Top:     10,
+	Left:    10,
+	Opacity: 0.8,
+})
+```
+
+## Return the result
+
+`HTTPResponse` converts the result into an `*http.Response`, ready to return from a `workers.Serve` handler.
+
+```go
+return result.HTTPResponse()
+```
+
+Alternatively, `Image` streams the output bytes as an `io.ReadCloser`, `ContentType` returns the result's media type, and `Response` returns the raw JS `Response` — pass `ImageTransformationResponseOptions` to attach extra headers.
+
+`Info` reads an image's metadata without transforming it:
+
+```go
+info, err := img.Info(imageBytes, images.ImageInputOptions{})
+fmt.Println(info.Format, info.Width, info.Height)
+```

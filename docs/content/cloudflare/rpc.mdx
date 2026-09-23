@@ -1,0 +1,128 @@
+---
+title: RPC and named entrypoints
+description: Call and host Cloudflare Workers RPC methods on named WorkerEntrypoints from Go.
+sidebar:
+  badge: Experimental
+---
+
+[Workers RPC](https://developers.cloudflare.com/workers/runtime-apis/rpc/) lets one Worker call methods on another over a Service binding pointing at a named `WorkerEntrypoint`, or call a Durable Object's own methods beyond `fetch()`. The `exp/cloudflare/rpc` package covers both directions: calling a remote entrypoint and hosting one implemented in Go.
+
+:::warning[Experimental]
+The `exp/cloudflare/rpc` package lives under `exp/cloudflare` and is experimental. Its API is likely to change.
+:::
+
+TypeScript's typed `Rpc.Provider<T>` stubs can't be generated for statically-typed Go — there's no way to derive a Go method set from an arbitrary remote class's shape — so both sides of this package are dynamic: a caller invokes a method by name with untyped arguments, and a Go-hosted entrypoint registers its methods by name too.
+
+## Call a remote entrypoint
+
+`rpc.NewStub(bindingName)` resolves a Service binding and wraps it as a `*rpc.Stub`. `Call` invokes a method and awaits its result (an RPC method's return is always a Promise); `CallJSON` additionally JSON round-trips the result into a typed Go value.
+
+```go
+stub, err := rpc.NewStub("SELF")
+if err != nil {
+	return err
+}
+
+var sum int
+if err := stub.CallJSON("add", &sum, 1, 2); err != nil {
+	return err
+}
+
+var greeting string
+if err := stub.CallJSON("greet", &greeting, "go"); err != nil {
+	return err
+}
+```
+
+Arguments are converted the way `syscall/js.ValueOf` converts a Go value to JS — primitives, `map[string]any`, `[]any`, `js.Value`, and types implementing `syscall/js.Wrapper` are supported; anything else panics. `Call` returns the raw `js.Value` result; if it's itself an RPC stub or function (e.g. a method returning another `Rpc.Target`), wrap it in another `Stub` via `rpc.StubFromJS` to keep calling into it.
+
+`rpc.StubFromJS(v)` wraps an existing JS value as a `*rpc.Stub` directly — used for a Durable Object stub's own RPC methods:
+
+```go
+stub, err := ns.Get(id)
+if err != nil {
+	return err
+}
+var greeting string
+err = stub.RPC().CallJSON("greet", &greeting, "go")
+```
+
+`DurableObjectStub.RPC()` (`cloudflare` package) returns an `*rpc.Stub` for exactly this — see [Durable Objects](/cloudflare/durable-objects).
+
+## Host RPC methods in Go
+
+A Go-hosted `WorkerEntrypoint` registers its methods with `rpc.Register`, before `workers.Serve` (or any other blocking call). `rpc.Method` takes and returns raw `js.Value`s; `rpc.MethodJSON` adapts a typed function instead.
+
+```go
+import (
+	"context"
+	"encoding/json"
+
+	"github.com/syumai/workers-go/exp/cloudflare/rpc"
+)
+
+var addMethod = rpc.MethodJSON(func(ctx context.Context, args []json.RawMessage) (int, error) {
+	var a, b int
+	json.Unmarshal(args[0], &a)
+	json.Unmarshal(args[1], &b)
+	return a + b, nil
+})
+
+var greetMethod = rpc.MethodJSON(func(ctx context.Context, args []json.RawMessage) (string, error) {
+	var name string
+	json.Unmarshal(args[0], &name)
+	return "hello, " + name, nil
+})
+
+func main() {
+	rpc.Register("MyService", map[string]rpc.Method{
+		"add":   addMethod,
+		"greet": greetMethod,
+	})
+	rpc.RegisterFetch("MyService", myFetchHandler) // optional; serves MyService's own fetch()
+
+	workers.Serve(nil)
+}
+```
+
+Since RPC arguments arrive positionally with no fixed arity known to the package, `MethodJSON`'s function receives each argument individually JSON-encoded as a `json.RawMessage` — decode as many of them, into whatever shape the method expects.
+
+`rpc.RegisterFetch(className, handler)` is optional: it serves the entrypoint's own `fetch()` trigger — distinct from the Worker's regular default-export handler passed to `workers.Serve` — which runs when something calls `.fetch()` on a stub bound to this named entrypoint. A class generated without a matching `RegisterFetch` call rejects its `fetch()` calls at request time; a class with no `Register`-ed method for a name rejects that call.
+
+## Build and wiring
+
+Pass `-entrypoints` to `workers-assets-gen` — semicolon-separate multiple classes, and comma-separate method names within one class (`Name` alone is valid too, with no RPC methods beyond the always-generated `fetch()`):
+
+```sh
+go run github.com/syumai/workers-go/cmd/workers-assets-gen -mode=go -entrypoints=MyService:add,greet
+```
+
+This appends one subclass per spec to the generated `worker.mjs`:
+
+```js
+export class MyService extends GoWorkerEntrypoint {
+  static goClassName = "MyService";
+  async add(...args) { return (await this._bind()).handleRPC("add", args); }
+  async greet(...args) { return (await this._bind()).handleRPC("greet", args); }
+  async fetch(req) { return (await this._bind()).handleEntrypointFetch(req); }
+}
+```
+
+The name passed here, the `className` given to `rpc.Register`/`rpc.RegisterFetch`, and (for a Service binding) `wrangler.toml`'s `[[services]] entrypoint` must all match exactly.
+
+Point a Service binding at it in `wrangler.toml` — including from the same Worker, to call its own entrypoint:
+
+```toml
+compatibility_date = "2024-04-03"
+
+[[services]]
+binding = "SELF"
+service = "rpc-go"
+entrypoint = "MyService"
+```
+
+Workers RPC requires `compatibility_date` of `2024-04-03` or later (or the `rpc` compatibility flag on an earlier date).
+
+## Example project
+
+[_examples/rpc-go](https://github.com/syumai/workers-go/tree/main/_examples/rpc-go) hosts a `MyService` entrypoint with `add`/`greet` RPC methods and calls it from the same Worker's regular fetch handler through a `SELF` Service binding.

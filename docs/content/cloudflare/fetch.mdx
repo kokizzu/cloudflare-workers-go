@@ -1,0 +1,68 @@
+---
+title: Outbound fetch
+description: Make outbound HTTP requests, call other workers through Service Bindings, and read incoming request properties.
+---
+
+The `cloudflare/fetch` package performs outbound requests through the Workers `fetch` API and reads Cloudflare-specific request properties.
+
+## Fetch with an http.Client
+
+`fetch.NewClient()` creates a client; `HTTPClient` adapts it to a standard `*http.Client` you can use as a `RoundTripper` — for example in a reverse proxy.
+
+```go
+fc := fetch.NewClient()
+hc := fc.HTTPClient(fetch.RedirectModeFollow)
+
+proxy := httputil.ReverseProxy{
+	Transport: hc.Transport,
+	Director:  func(r *http.Request) { r.URL = req.URL },
+}
+proxy.ServeHTTP(w, req)
+```
+
+Redirect modes: `fetch.RedirectModeFollow`, `fetch.RedirectModeError`, `fetch.RedirectModeManual`.
+
+## Fetch with RequestInit
+
+For per-request options, build a `fetch.Request` and call `Client.Do` with a `RequestInit`.
+
+```go
+req, err := fetch.NewRequest(ctx, http.MethodGet, "https://example.com", nil)
+res, err := fc.Do(req, &fetch.RequestInit{
+	Redirect: fetch.RedirectModeManual,
+})
+```
+
+## Service Bindings
+
+A [Service Binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/) calls another worker directly. Declare it in `wrangler.toml`, resolve it with `cloudflare.GetBinding`, and pass it to `fetch.WithBinding`.
+
+```toml
+services = [
+    { binding = "hello", service = "hello" }
+]
+```
+
+```go
+bind := cloudflare.GetBinding("hello")
+fc := fetch.NewClient(fetch.WithBinding(bind))
+res, err := fc.HTTPClient(fetch.RedirectModeFollow).Do(req)
+```
+
+## Incoming request properties
+
+`fetch.NewIncomingProperties(req.Context())` returns the [`cf` object](https://developers.cloudflare.com/workers/runtime-apis/request/#incomingrequestcfproperties) of the incoming request — country, city, ASN, TLS info, colo, bot management, and more.
+
+```go
+p, err := fetch.NewIncomingProperties(req.Context())
+if err != nil {
+	// not running on Cloudflare
+}
+fmt.Println(p.Country, p.City, p.Colo, p.Asn)
+```
+
+## Example projects
+
+- [_examples/fetch](https://github.com/syumai/workers-go/tree/main/_examples/fetch)
+- [_examples/service-bindings](https://github.com/syumai/workers-go/tree/main/_examples/service-bindings)
+- [_examples/incoming](https://github.com/syumai/workers-go/tree/main/_examples/incoming) — dumps the incoming `cf` properties as JSON.

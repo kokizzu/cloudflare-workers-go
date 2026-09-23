@@ -1,0 +1,50 @@
+---
+title: Hono middleware
+description: Write Hono middleware in Go with the experimental exp/hono package.
+sidebar:
+  badge: Experimental
+---
+
+:::warning[Experimental]
+The `exp/hono` package lives under `exp/` and is experimental. Its API is likely to change.
+:::
+
+[Hono](https://hono.dev/) is a JavaScript web framework that runs on Workers. `exp/hono` lets you write a Hono **middleware** in Go — the Hono app itself stays in JavaScript, and calls into your Wasm module on each request.
+
+## Write a middleware in Go
+
+A `hono.Middleware` has the signature `func(c *hono.Context, next func())`. Call `next()` to pass control to the next middleware or route handler; work before `next()` runs on the way in, work after it runs on the way out.
+
+```go
+import "github.com/syumai/workers-go/exp/hono"
+
+func main() {
+	hono.ServeMiddleware(hono.ChainMiddlewares(
+		func(c *hono.Context, next func()) {
+			c.SetHeader("X-Powered-By", "workers-go")
+			next()
+		},
+	))
+}
+```
+
+- `hono.ServeMiddleware(m)` registers the middleware and blocks.
+- `hono.ChainMiddlewares(m1, m2, ...)` composes several middlewares into one, nesting them in order.
+
+## The Context API
+
+`*hono.Context` wraps the Hono context object:
+
+| Method | Description |
+| --- | --- |
+| `Request()` | The incoming request as `*http.Request` |
+| `SetHeader(key, value)` | Set a response header |
+| `SetStatus(code)` | Set the response status code |
+| `SetBody(body)` | Replace the response body with an `io.ReadCloser` |
+| `ResponseBody()` | Read the response body produced downstream |
+| `RawResponse()` | The raw `js.Value` response object |
+| `SetResponse(respObj)` | Replace the response with a raw `js.Value` |
+
+## Wire it up in JavaScript
+
+The Wasm module exposes a `runHonoMiddleware` binding. Register it as Hono middleware in your JavaScript entry point so it runs on each request; see the Hono documentation for the middleware API.

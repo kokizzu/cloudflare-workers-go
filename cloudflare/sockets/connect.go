@@ -29,23 +29,31 @@ type SocketOptions struct {
 
 const defaultDeadline = 999999 * time.Hour
 
+// toJS converts o to the JS options object passed as the second argument of
+// connect(). A nil *SocketOptions converts to an empty object, matching the
+// previous inline behavior in Connect.
+func (o *SocketOptions) toJS() js.Value {
+	optionsObj := jsutil.NewObject()
+	if o != nil {
+		if o.AllowHalfOpen {
+			optionsObj.Set("allowHalfOpen", true)
+		}
+		if o.SecureTransport != "" {
+			optionsObj.Set("secureTransport", string(o.SecureTransport))
+		}
+	}
+	return optionsObj
+}
+
 func Connect(ctx context.Context, addr string, opts *SocketOptions) (net.Conn, error) {
 	connect, err := cfruntimecontext.GetRuntimeContextValue("connect")
 	if err != nil {
 		return nil, err
 	}
-	optionsObj := jsutil.NewObject()
-	if opts != nil {
-		if opts.AllowHalfOpen {
-			optionsObj.Set("allowHalfOpen", true)
-		}
-		if opts.SecureTransport != "" {
-			optionsObj.Set("secureTransport", string(opts.SecureTransport))
-		}
-	}
-	sockVal, err := jsutil.TryCatch(js.FuncOf(func(_ js.Value, args []js.Value) any {
+	optionsObj := opts.toJS()
+	sockVal, err := jsutil.TryCatch(func() js.Value {
 		return connect.Invoke(addr, optionsObj)
-	}))
+	})
 	if err != nil {
 		return nil, err
 	}

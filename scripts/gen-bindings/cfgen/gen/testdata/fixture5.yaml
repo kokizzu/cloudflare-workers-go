@@ -1,0 +1,9 @@
+package: registry
+doc: |
+  Package registry is a fifth synthetic fixture package, covering the
+  tmp/06-codegen-spec.md 4.1 cfgen extensions: Map<string, T> return values
+  and rest parameters.
+include:
+  - Registry
+bindings:
+  - Registry

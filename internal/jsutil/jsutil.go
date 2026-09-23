@@ -69,7 +69,7 @@ func AwaitPromise(promiseVal js.Value) (js.Value, error) {
 	catch = js.FuncOf(func(_ js.Value, args []js.Value) any {
 		defer catch.Release()
 		result := args[0]
-		errCh <- fmt.Errorf("failed on promise: %s", result.Call("toString").String())
+		errCh <- fmt.Errorf("failed on promise: %s", errorString(result))
 		return js.Undefined()
 	})
 	promiseVal.Call("then", then).Call("catch", catch)
@@ -79,6 +79,17 @@ func AwaitPromise(promiseVal js.Value) (js.Value, error) {
 	case err := <-errCh:
 		return js.Value{}, err
 	}
+}
+
+// errorString stringifies a JavaScript rejection/error value. Rejections
+// are usually Error objects, but a Promise can reject with any value and
+// Value.Call panics on non-object values, so primitives are stringified
+// through the String() function instead of a toString method call.
+func errorString(v js.Value) string {
+	if v.Type() == js.TypeObject {
+		return v.Call("toString").String()
+	}
+	return js.Global().Get("String").Invoke(v).String()
 }
 
 // StrRecordToMap converts JavaScript side's Record<string, string> into map[string]string.
@@ -98,28 +109,57 @@ func StrRecordToMap(v js.Value) map[string]string {
 	return result
 }
 
-// MaybeString returns string value of given JavaScript value or returns "" if the value is undefined.
+// MaybeString returns string value of given JavaScript value or returns "" if the value is undefined or null.
 func MaybeString(v js.Value) string {
-	if v.IsUndefined() {
+	if v.IsUndefined() || v.IsNull() {
 		return ""
 	}
 	return v.String()
 }
 
-// MaybeInt returns int value of given JavaScript value or returns nil if the value is undefined.
+// MaybeInt returns int value of given JavaScript value or returns nil if the value is undefined or null.
 func MaybeInt(v js.Value) int {
-	if v.IsUndefined() {
+	if v.IsUndefined() || v.IsNull() {
 		return 0
 	}
 	return v.Int()
 }
 
-// MaybeDate returns time.Time value of given JavaScript Date value or returns nil if the value is undefined.
+// MaybeDate returns time.Time value of given JavaScript Date value or returns nil if the value is undefined or null.
 func MaybeDate(v js.Value) (time.Time, error) {
-	if v.IsUndefined() {
+	if v.IsUndefined() || v.IsNull() {
 		return time.Time{}, nil
 	}
 	return DateToTime(v)
+}
+
+// MaybeBool returns bool value of given JavaScript value or returns false if the value is undefined or null.
+func MaybeBool(v js.Value) bool {
+	if v.IsUndefined() || v.IsNull() {
+		return false
+	}
+	return v.Bool()
+}
+
+// MaybeFloat returns float64 value of given JavaScript value or returns 0 if the value is undefined or null.
+func MaybeFloat(v js.Value) float64 {
+	if v.IsUndefined() || v.IsNull() {
+		return 0
+	}
+	return v.Float()
+}
+
+// MaybeStringSlice returns []string value of given JavaScript Array value or returns nil if the value is undefined or null.
+func MaybeStringSlice(v js.Value) []string {
+	if v.IsUndefined() || v.IsNull() {
+		return nil
+	}
+	length := v.Length()
+	result := make([]string, length)
+	for i := 0; i < length; i++ {
+		result[i] = v.Index(i).String()
+	}
+	return result
 }
 
 // DateToTime converts JavaScript side's Data object into time.Time.
@@ -131,4 +171,18 @@ func DateToTime(v js.Value) (time.Time, error) {
 // TimeToDate converts Go side's time.Time into Date object.
 func TimeToDate(t time.Time) js.Value {
 	return DateClass.New(t.UnixMilli())
+}
+
+// BytesToJS copies a Go byte slice into a new JavaScript Uint8Array.
+func BytesToJS(b []byte) js.Value {
+	ua := NewUint8Array(len(b))
+	js.CopyBytesToJS(ua, b)
+	return ua
+}
+
+// BytesFromJS copies the contents of a JavaScript typed array (e.g. Uint8Array) into a new Go byte slice.
+func BytesFromJS(v js.Value) []byte {
+	b := make([]byte, v.Get("byteLength").Int())
+	js.CopyBytesToGo(b, v)
+	return b
 }

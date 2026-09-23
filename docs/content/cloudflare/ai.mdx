@@ -1,0 +1,99 @@
+---
+title: Workers AI
+description: Run Workers AI models — text generation, streaming, and text embeddings — from Go.
+sidebar:
+  badge: Experimental
+---
+
+[Workers AI](https://developers.cloudflare.com/workers-ai/) runs machine-learning models on Cloudflare's network. The `exp/cloudflare/ai` package wraps the bound `Ai` object.
+
+:::warning[Experimental]
+This package lives under `exp/cloudflare` and its API may change.
+:::
+
+## Declare the binding
+
+```toml
+[ai]
+binding = "AI"
+```
+
+## Resolve the binding
+
+`ai.NewAi` resolves the binding by name and returns an error when no binding with that name exists.
+
+```go
+import "github.com/syumai/workers-go/exp/cloudflare/ai"
+
+aiBinding, err := ai.NewAi("AI")
+if err != nil {
+	// no binding named AI
+}
+```
+
+## Generate text
+
+`RunTextGeneration` runs a text-generation model (the `@cf/meta/llama-*` family and similar) and decodes the result into `AiTextGenerationOutput`.
+
+```go
+out, err := aiBinding.RunTextGeneration(
+	"@cf/meta/llama-3-8b-instruct",
+	ai.AiTextGenerationInput{Prompt: "What is the origin of the phrase 'Hello, World'?"},
+	nil,
+)
+if err != nil {
+	return err
+}
+fmt.Println(out.Response)
+```
+
+For chat-style input, set `Messages` instead of `Prompt`:
+
+```go
+out, err := aiBinding.RunTextGeneration(
+	"@cf/meta/llama-3-8b-instruct",
+	ai.AiTextGenerationInput{
+		Messages: []ai.RoleScopedChatInput{
+			{Role: "system", Content: "You are a helpful assistant."},
+			{Role: "user", Content: "Hello!"},
+		},
+	},
+	nil,
+)
+```
+
+## Stream a response
+
+`RunTextGenerationStream` sets `Stream` on the input and returns the raw server-sent-events byte stream as an `io.ReadCloser` — e.g. to proxy straight into a `text/event-stream` response.
+
+```go
+rc, err := aiBinding.RunTextGenerationStream(
+	"@cf/meta/llama-3-8b-instruct",
+	ai.AiTextGenerationInput{Prompt: "Tell me a story."},
+	nil,
+)
+if err != nil {
+	return err
+}
+defer rc.Close()
+
+w.Header().Set("Content-Type", "text/event-stream")
+io.Copy(w, rc)
+```
+
+## Embed text
+
+`RunTextEmbeddings` runs a text-embeddings model (the `@cf/baai/bge-*` family and similar). `Data` holds one `[]float64` vector per input text and `Shape` the matrix dimensions.
+
+```go
+out, err := aiBinding.RunTextEmbeddings(
+	"@cf/baai/bge-base-en-v1.5",
+	ai.AiTextEmbeddingsInput{Text: []string{"first sentence", "second sentence"}},
+	nil,
+)
+vectors := out.Data // [][]float64
+```
+
+:::note
+For any other model shape, `Run` and `RunStream` call the binding's raw `run(model, inputs, options)` method with a `js.Value` input and return the raw `js.Value` result. `Models(params)` searches the available model catalog.
+:::

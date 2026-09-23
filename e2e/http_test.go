@@ -1,0 +1,248 @@
+//go:build e2e
+
+package e2e
+
+import (
+	"encoding/json"
+	"net/http"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+)
+
+// echoResponse mirrors testdata/workers/kitchensink/main.go's echoResponse.
+type echoResponse struct {
+	Method     string              `json:"method"`
+	URL        string              `json:"url"`
+	Headers    map[string][]string `json:"headers"`
+	Body       string              `json:"body"`
+	RemoteAddr string              `json:"remoteAddr"`
+	Host       string              `json:"host"`
+}
+
+// cfPropsResponse decodes the subset of testdata/workers/kitchensink/cf.go's
+// GET /cf response (a JSON-encoded *fetch.IncomingProperties, whose fields
+// carry no json tags, so field names are used as-is) that the e2e test
+// needs.
+type cfPropsResponse struct {
+	Colo string
+}
+
+// waitUntilPollTimeout bounds how long the waituntil/runs_after_response
+// subtest polls GET /waituntil/result for the deferred write to land.
+const waitUntilPollTimeout = 5 * time.Second
+
+// TestKitchenSink starts a single `wrangler dev` instance for the
+// kitchensink fixture and runs every kitchensink-backed check as a
+// subtest, so the ~1-2s wrangler startup cost is paid once. KV-specific
+// subtests live in kv_test.go; both files contribute t.Run cases to this
+// same test function.
+func TestKitchenSink(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping e2e test in short mode")
+	}
+	w := startWrangler(t, "kitchensink")
+
+	t.Run("hello", func(t *testing.T) {
+		resp, body := w.Get(t, "/healthz")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+		}
+		if body != "ok" {
+			t.Errorf("body = %q, want %q", body, "ok")
+		}
+	})
+
+	t.Run("echo/method_url", func(t *testing.T) {
+		resp, body := w.Get(t, "/echo?x=1")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+		}
+		var got echoResponse
+		if err := json.Unmarshal([]byte(body), &got); err != nil {
+			t.Fatalf("failed to unmarshal echo response %q: %v", body, err)
+		}
+		if got.Method != http.MethodGet {
+			t.Errorf("method = %q, want %q", got.Method, http.MethodGet)
+		}
+		if !strings.HasSuffix(got.URL, "/echo?x=1") {
+			t.Errorf("url = %q, want suffix %q", got.URL, "/echo?x=1")
+		}
+	})
+
+	t.Run("echo/headers_multi_value", func(t *testing.T) {
+		headers := http.Header{}
+		headers.Add("X-Test", "a")
+		headers.Add("X-Test", "b")
+		resp, body := w.Do(t, http.MethodGet, "/echo", headers, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+		}
+		var got echoResponse
+		if err := json.Unmarshal([]byte(body), &got); err != nil {
+			t.Fatalf("failed to unmarshal echo response %q: %v", body, err)
+		}
+		// The underlying fetch Headers object combines same-name headers
+		// into a single "a, b" (comma-space) entry, and
+		// internal/jshttp.ToHeader splits them back and trims the join
+		// whitespace.
+		want := []string{"a", "b"}
+		if got := got.Headers["X-Test"]; !equalStringSlices(got, want) {
+			t.Errorf("X-Test = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("echo/set_cookie_with_embedded_comma", func(t *testing.T) {
+		// A Set-Cookie value that itself contains a comma (e.g. an
+		// Expires date) must survive as a single header value:
+		// internal/jshttp.ToHeader reads cookies via
+		// Headers.getSetCookie() instead of splitting the combined
+		// entries() value.
+		const cookie = "a=1; Expires=Wed, 21 Oct 2015 07:28:00 GMT"
+		headers := http.Header{"Set-Cookie": {cookie}}
+		resp, body := w.Do(t, http.MethodGet, "/echo", headers, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+		}
+		var got echoResponse
+		if err := json.Unmarshal([]byte(body), &got); err != nil {
+			t.Fatalf("failed to unmarshal echo response %q: %v", body, err)
+		}
+		values := got.Headers["Set-Cookie"]
+		if len(values) != 1 || values[0] != cookie {
+			t.Errorf("Set-Cookie = %v, want [%q]", values, cookie)
+		}
+	})
+
+	t.Run("echo/body", func(t *testing.T) {
+		const wantBody = "hello from the e2e test"
+		resp, body := w.Do(t, http.MethodPost, "/echo", nil, strings.NewReader(wantBody))
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+		}
+		var got echoResponse
+		if err := json.Unmarshal([]byte(body), &got); err != nil {
+			t.Fatalf("failed to unmarshal echo response %q: %v", body, err)
+		}
+		if got.Method != http.MethodPost {
+			t.Errorf("method = %q, want %q", got.Method, http.MethodPost)
+		}
+		if got.Body != wantBody {
+			t.Errorf("body = %q, want %q", got.Body, wantBody)
+		}
+	})
+
+	t.Run("stream", func(t *testing.T) {
+		resp, body := w.Get(t, "/stream?n=5")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+		}
+		var want strings.Builder
+		for i := 0; i < 5; i++ {
+			want.WriteString("line " + strconv.Itoa(i) + "\n")
+		}
+		if body != want.String() {
+			t.Errorf("body = %q, want %q", body, want.String())
+		}
+	})
+
+	t.Run("fixed/content_length_preserved", func(t *testing.T) {
+		const size = 12345
+		resp, body := w.Get(t, "/fixed?size="+strconv.Itoa(size))
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+		}
+		if got := resp.Header.Get("Content-Length"); got != strconv.Itoa(size) {
+			t.Errorf("Content-Length header = %q, want %q", got, strconv.Itoa(size))
+		}
+		if len(body) != size {
+			t.Errorf("body length = %d, want %d", len(body), size)
+		}
+	})
+
+	t.Run("env", func(t *testing.T) {
+		resp, body := w.Get(t, "/env/GREETING")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+		}
+		if body != "hello" {
+			t.Errorf("body = %q, want %q", body, "hello")
+		}
+	})
+
+	t.Run("cf/has_colo_or_error", func(t *testing.T) {
+		resp, body := w.Get(t, "/cf")
+		switch resp.StatusCode {
+		case http.StatusOK:
+			var props cfPropsResponse
+			if err := json.Unmarshal([]byte(body), &props); err != nil {
+				t.Fatalf("failed to unmarshal /cf response %q: %v", body, err)
+			}
+			if props.Colo == "" {
+				t.Errorf("Colo is empty even though GET /cf returned 200 (body = %q)", body)
+			}
+		case http.StatusInternalServerError:
+			// fetch.NewIncomingProperties (cloudflare/fetch/property.go)
+			// returns this exact error when the trigger object has no "cf"
+			// property, which is the case under some wrangler dev
+			// configurations that don't populate request.cf locally.
+			const wantErr = "runtime is not cloudflare"
+			if got := strings.TrimSpace(body); got != wantErr {
+				t.Errorf("error body = %q, want %q", got, wantErr)
+			}
+		default:
+			t.Fatalf("status = %d, want %d or %d (body = %q)", resp.StatusCode, http.StatusOK, http.StatusInternalServerError, body)
+		}
+	})
+
+	t.Run("waituntil/runs_after_response", func(t *testing.T) {
+		resp, body := w.Get(t, "/waituntil")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET /waituntil status = %d, want %d (body = %q)", resp.StatusCode, http.StatusOK, body)
+		}
+
+		deadline := time.Now().Add(waitUntilPollTimeout)
+		var lastResp *http.Response
+		var lastBody string
+		for time.Now().Before(deadline) {
+			lastResp, lastBody = w.Get(t, "/waituntil/result")
+			if lastResp.StatusCode == http.StatusOK && lastBody == "done" {
+				return // success
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		t.Fatalf("waitUntil task did not write %q to KV within %v; last GET /waituntil/result status = %d, body = %q", "done", waitUntilPollTimeout, lastResp.StatusCode, lastBody)
+	})
+
+	t.Run("kv/put_get", testKVPutGet(w))
+	t.Run("kv/get_missing", testKVGetMissing(w))
+	t.Run("kv/list_prefix", testKVListPrefix(w))
+	t.Run("kv/delete", testKVDelete(w))
+
+	t.Run("r2/put_get_roundtrip", testR2PutGetRoundtrip(w))
+	t.Run("r2/head", testR2Head(w))
+	t.Run("r2/get_missing", testR2GetMissing(w))
+	t.Run("r2/delete", testR2Delete(w))
+	t.Run("r2/list", testR2List(w))
+
+	t.Run("d1/create_insert_query", testD1CreateInsertQuery(w))
+	t.Run("d1/blob_roundtrip", testD1BlobRoundtrip(w))
+	t.Run("d1/null_real_text", testD1NullRealText(w))
+
+	t.Run("queue/roundtrip", testQueueRoundtrip(w))
+
+	t.Run("cron/fires", testCronFires(w))
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

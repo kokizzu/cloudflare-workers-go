@@ -1,0 +1,92 @@
+---
+title: Generated bindings (exp/cloudflare)
+description: How the exp/cloudflare Go bindings are mechanically generated from @cloudflare/workers-types.
+sidebar:
+  badge: Experimental
+---
+
+`exp/cloudflare/<pkg>` holds Go bindings for Cloudflare Workers runtime APIs that are mechanically generated from the `@cloudflare/workers-types` TypeScript definitions. Each subpackage wraps one JS interface/class family: one JS interface or class becomes one Go type, one method becomes one Go method, one property becomes one Go getter (or struct field, for data types).
+
+:::warning[Experimental]
+Everything under `exp/`, including this tree, is experimental. Its shape follows `@cloudflare/workers-types` directly, so it can gain, lose, or change fields and methods whenever the checked-in IR is regenerated from a newer `workers-types` release — including in a minor version release of this module. There is no attempt to hide Cloudflare's TypeScript API surface behind a more Go-idiomatic one here; the goal is coverage, not idiom.
+:::
+
+Prefer the hand-written packages under `cloudflare/` (`kv`, `r2`, `d1`, `cache`, `queues`, `sockets`, ...) where one already exists for the API you need — some of them (`kv`, `r2`, `cache`, and the producer side of `queues`) wrap a generated package here and round out its rough edges (e.g. `cloudflare/kv` returns a proper `kv.ErrNotFound` where the generated `KVNamespace.GetText` would otherwise hand back a nil `*string`). Use `exp/cloudflare/<pkg>` directly for APIs with no hand-written package yet, or reach into a generated handle's `JSValue()` when a hand-written wrapper doesn't expose something you need.
+
+## How it fits together
+
+```
+node_modules/@cloudflare/workers-types/<date>/index.d.ts   (not committed)
+        │  scripts/gen-bindings/src/extract.ts (Node + TypeScript Compiler API)
+        ▼
+scripts/gen-bindings/ir/index.json                          (committed IR)
+scripts/gen-bindings/ir/SOURCE                              (package@version + extraction date)
+        │  scripts/gen-bindings/cfgen (Go) + exp/internal/gen/overrides/<pkg>.yaml
+        ▼
+exp/cloudflare/<pkg>/z<pkg>_gen.go                           (generated, DO NOT EDIT)
+exp/cloudflare/<pkg>/<pkg>.go                                (hand-written, only where needed)
+```
+
+- **`scripts/gen-bindings/ir/index.json`** is a JSON dump of every top-level declaration (interface, class, type alias) in the `workers-types` `.d.ts` source, extracted once and committed. It's package/version-tagged by the sibling `SOURCE` file.
+- **`scripts/gen-bindings/cfgen`** (a separate Go module, so its `yaml` dependency doesn't leak into this module's `go.sum`) reads that IR plus one overrides YAML file per output package, and writes `exp/cloudflare/<pkg>/z<pkg>_gen.go`. It only needs Go — no Node — so this step, and the `-check` mode used in CI, run without any JS toolchain.
+- **`exp/internal/jsrt`** is the runtime helper vocabulary the generated code calls into (`jsrt.Await`, `jsrt.Call`, `jsrt.Binding`, byte/typed-array/Date/Headers conversions, ...).
+- A package may also contain a hand-written `<pkg>.go` file for anything cfgen can't express mechanically — a synchronous method bridged to another package's types (`hyperdrive.Hyperdrive.Connect`), a Go type hosting a JS-side class (`durableobjects.Register`, `workflows.Register`), or an API with no IR declaration at all (`cf.FromRequest`).
+
+`exp/cloudflare/doc.go` defines `WorkersTypesVersion`, the exact `@cloudflare/workers-types` version the checked-in IR (and therefore every generated package) was derived from.
+
+## Type mapping
+
+The generator maps each TypeScript shape to a Go equivalent:
+
+| TypeScript | Go |
+| --- | --- |
+| `string` / `boolean` / `number` | `string` / `bool` / `float64` (or `int` via a `types:` override) |
+| `Promise<T>` | a method return becomes `(T, error)` |
+| `T \| null` / `T \| undefined` on a nullable primitive | `*T` |
+| `T \| null` / `T \| undefined` where `T` is itself a nested data-type struct | `*T` (omitted from `toJS()` when nil) |
+| `Date` | `time.Time` |
+| `ReadableStream<...>` | `io.ReadCloser` |
+| `ArrayBuffer` / `Uint8Array` | `[]byte` |
+| `Array<T>` | `[]T` |
+| `Record<string, T>` | `map[string]T` |
+| `Map<string, T>` | `map[string]T` (a JS `Map`, unlike a `Record`, isn't a plain object) |
+| `Headers` | `http.Header` |
+| a ref to another type in the same package's `include:` list | that type's Go type |
+| anything else unresolvable (`Request`/`Response`, an unincluded ref, most unions/intersections/functions) | `js.Value` — the escape hatch: call `.JSValue()` on any generated handle type, or use a value directly, when the wrapper doesn't expose what you need |
+
+See `exp/cloudflare/README.md`'s "Type mapping" table for the complete set of rules, including how inline object/union types are synthesized into their own named Go structs.
+
+Every generated binding-backed type follows the same constructor convention: `New<Name>(bindingName string) (*Name, error)` (or `(Name, error)` for a data type) resolves the binding from the Worker's env at call time — the same pattern `kv.NewNamespace`, `r2.NewBucket`, and every other package in this section use.
+
+## Hand-written packages wrapping a generated one
+
+`cloudflare/kv`, `cloudflare/r2`, `cloudflare/cache`, and the producer side of `cloudflare/queues` are all "L2" packages: each holds a handle to a generated "L1" type (e.g. `kv.Namespace` wraps a `*kvjs.KVNamespace` from `exp/cloudflare/kv`), builds the right options struct for each call, and adapts the result to a narrower, pre-existing Go API. `cloudflare/dostub.go` (`DurableObjectNamespace`/`DurableObjectStub`) is a variant of the same pattern: it predates `exp/cloudflare/durableobjects` and keeps its own pre-existing exported API, but delegates internally to the generated `durableobjects` package.
+
+## Regenerating the bindings
+
+Most contributors never need to do this — the IR and all generated files are committed. Regenerate only when a newer `@cloudflare/workers-types` release should be picked up, or when adding/changing a generated package's overrides.
+
+Requirements: **Node.js 24+** and **pnpm** (for the extraction step only — no `ts-node`/`tsx` needed, since it uses Node's built-in TypeScript type stripping), and Go 1.21+ for `cfgen` itself.
+
+```sh
+make gen-bindings        # pnpm install + extract -> IR, then cfgen -> Go
+```
+
+This is also the sole `//go:generate` directive in `exp/cloudflare/doc.go`, so `go generate ./exp/cloudflare/...` (from the repo root) works too. To regenerate only one package while iterating on its overrides file:
+
+```sh
+go run -C scripts/gen-bindings ./cfgen -root "$(pwd)" -pkg workflows
+```
+
+CI runs `make gen-bindings-check`, which re-derives every package from the committed IR and overrides and fails if the checked-in `z<pkg>_gen.go` files don't match — it doesn't need Node/pnpm, since it only reads the already-committed IR.
+
+## Adding a new generated package
+
+1. Find the declaration name(s) you need in the committed IR: `jq '.decls[] | select(.name | test("MyThing")) | .name' scripts/gen-bindings/ir/index.json`, then inspect the full declaration before writing overrides.
+2. Add `exp/internal/gen/overrides/mypkg.yaml` (package name = output directory name) with at least `package:` and `include:` — the declarations to generate.
+3. Run `go run -C scripts/gen-bindings ./cfgen -root "$(pwd)" -pkg mypkg` and read any warnings — each one names a field/param that fell back to `js.Value` and why.
+4. Add `types:`/`rename:`/`handwritten:`/`exclude:` entries to tighten the mapping, and re-run.
+5. `GOOS=js GOARCH=wasm go build ./exp/...` and `go vet` to confirm the generated package compiles, then add at least one `//go:build js && wasm` test.
+6. `make gen-bindings-check` should now pass.
+
+See `exp/cloudflare/README.md`'s "Writing an overrides file" section for the full YAML schema (`bindings:`, `rename:`, `types:`, `overloads:`, `handwritten:`, `exclude:`, ...).

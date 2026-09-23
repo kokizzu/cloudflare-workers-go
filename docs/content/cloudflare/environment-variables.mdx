@@ -1,0 +1,55 @@
+---
+title: Environment variables
+description: Read environment variables and arbitrary bindings declared in wrangler.toml from Go.
+---
+
+Environment variables and bindings are declared in `wrangler.toml` (or `wrangler.jsonc`) and read through the `cloudflare` package.
+
+## Declare variables
+
+```toml
+[vars]
+MY_ENV = "my env value"
+```
+
+## Read a variable
+
+`cloudflare.Getenv` returns the value of an environment variable as a string. It returns an empty string when the variable is not defined.
+
+```go
+package main
+
+import (
+	"fmt"
+	"net/http"
+
+	"github.com/syumai/workers-go"
+	"github.com/syumai/workers-go/cloudflare"
+)
+
+func main() {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		fmt.Fprintf(w, "MY_ENV: %s", cloudflare.Getenv("MY_ENV"))
+	})
+	workers.Serve(handler)
+}
+```
+
+:::note
+`Getenv` panics when called outside of a request context. Call it inside a handler.
+:::
+
+## Read an arbitrary binding
+
+For bindings that are not plain strings — Service Bindings, KV namespaces, and so on — use `cloudflare.GetBinding`, which returns the raw `js.Value`. You can pass it to helpers such as `fetch.WithBinding`.
+
+```go
+bind := cloudflare.GetBinding("hello")
+fc := fetch.NewClient(fetch.WithBinding(bind))
+```
+
+See [Outbound fetch and Service Bindings](/cloudflare/fetch) for a complete example.
+
+## Example project
+
+[_examples/env](https://github.com/syumai/workers-go/tree/main/_examples/env)

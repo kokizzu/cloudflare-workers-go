@@ -1,0 +1,46 @@
+---
+title: Cron Triggers
+description: Run Go tasks on a schedule with Cloudflare Cron Triggers.
+---
+
+[Cron Triggers](https://developers.cloudflare.com/workers/configuration/cron-triggers/) invoke your worker on a schedule. The `cloudflare/cron` package runs a Go function for each scheduled event.
+
+## Declare the trigger
+
+```toml
+[triggers]
+crons = ["* * * * *"]
+```
+
+## Schedule a task
+
+`cron.ScheduleTask` registers a `func(ctx context.Context) error` and blocks. Inside the task, `cron.NewEvent(ctx)` returns the cron expression and scheduled time.
+
+```go
+func task(ctx context.Context) error {
+	e, err := cron.NewEvent(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Println(e.Cron, e.ScheduledTime.Unix())
+
+	// background work that outlives the task
+	cloudflare.WaitUntil(func() {
+		fmt.Println("Run sub task after returning from main task")
+	})
+	return nil
+}
+
+func main() {
+	cron.ScheduleTask(task)
+}
+```
+
+## Combine with an HTTP server
+
+Use `cron.ScheduleTaskNonBlock` with `workers.ServeNonBlock` to run a cron task and an HTTP server in the same worker — see [Combine multiple triggers](/cloudflare#combine-multiple-triggers). `cron.Done()` closes when the scheduler is done.
+
+## Example projects
+
+- [_examples/cron](https://github.com/syumai/workers-go/tree/main/_examples/cron)
+- [_examples/multiple-handlers](https://github.com/syumai/workers-go/tree/main/_examples/multiple-handlers) — HTTP server and cron task together.
