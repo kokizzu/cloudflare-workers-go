@@ -19,3 +19,7 @@ build-examples:
 .PHONY: gen-wasm-exec
 gen-wasm-exec:
 	cd scripts/gen-wasm-exec && pnpm run gen --go $(GO_VERSION) --tinygo $(TINYGO_VERSION)
+
+.PHONY: gen-deno
+gen-deno:
+	deno run --allow-run=deno,gofmt --allow-read --allow-write --allow-env scripts/gen-deno/main.ts

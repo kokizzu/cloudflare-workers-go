@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"embed"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 )
@@ -17,6 +19,7 @@ const (
 	assetDirPath        = "assets"
 	commonDirPath       = "assets/common"
 	runtimeDirPath      = "assets/runtime"
+	entryDirPath        = "assets/entry"
 	defaultBuildDirPath = "build"
 )
 
@@ -27,7 +30,7 @@ func main() {
 		buildDirPath string
 	)
 	flag.StringVar(&mode, "mode", string(ModeTinygo), `build mode: tinygo or go`)
-	flag.StringVar(&runtime, "runtime", string(RuntimeCloudflare), `runtime: cloudflare`)
+	flag.StringVar(&runtime, "runtime", string(RuntimeCloudflare), `runtime: cloudflare, browser, or deno`)
 	flag.StringVar(&buildDirPath, "o", defaultBuildDirPath, `output dir path: defaults to "build"`)
 	flag.Parse()
 	if !Mode(mode).IsValid() {
@@ -59,6 +62,9 @@ func runMain(mode Mode, runtime Runtime, buildDirPath string) error {
 	if err := copyRuntimeAssets(runtime, buildDirPath); err != nil {
 		return err
 	}
+	if err := copyEntryAsset(runtime, buildDirPath); err != nil {
+		return err
+	}
 	if err := copyCommonAssets(buildDirPath); err != nil {
 		return err
 	}
@@ -86,6 +92,25 @@ func copyWasmExecJS(mode Mode, buildDirPath string) error {
 func copyRuntimeAssets(runtime Runtime, buildDirPath string) error {
 	destPath := path.Join(buildDirPath, "runtime.mjs")
 	originPath := path.Join(runtimeDirPath, runtime.AssetFileName())
+	if err := copyFile(destPath, originPath); err != nil {
+		return err
+	}
+	return nil
+}
+
+// copyEntryAsset copies the runtime's entry point file to "main.ts" in the
+// build directory when the runtime provides one (e.g. Deno, whose entry point
+// calls Deno.serve). Runtimes that use worker.mjs as their entry point
+// (Cloudflare, browser) have no entry asset and are skipped.
+func copyEntryAsset(runtime Runtime, buildDirPath string) error {
+	originPath := path.Join(entryDirPath, string(runtime)+".ts")
+	if _, err := assets.ReadFile(originPath); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	destPath := path.Join(buildDirPath, "main.ts")
 	if err := copyFile(destPath, originPath); err != nil {
 		return err
 	}

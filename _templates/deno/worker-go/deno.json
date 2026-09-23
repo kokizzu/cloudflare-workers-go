@@ -1,0 +1,8 @@
+{
+  "tasks": {
+    "build": "go run github.com/syumai/workers-go/cmd/workers-assets-gen -runtime=deno -mode=go && GOOS=js GOARCH=wasm go build -o ./build/app.wasm .",
+    "dev": "deno run --allow-net --allow-read --allow-env build/main.ts",
+    "start": "deno task dev",
+    "deploy": "deployctl deploy --include=build build/main.ts"
+  }
+}

@@ -129,6 +129,13 @@ You will see **"Hello!"** as the response.
 
 If you want a more detailed description, please refer to the README.md file in the generated directory.
 
+## Deno Deploy (experimental)
+
+* `workers-go` also supports running the same `http.Handler` on Deno and [Deno Deploy](https://deno.com/deploy) via `Deno.serve`, without writing any JavaScript.
+* Generate the assets with `workers-assets-gen -runtime=deno`, build the Wasm binary, and serve `build/main.ts` with `deno run` or `deployctl deploy`.
+* The [deno/worker-go template](https://github.com/syumai/workers-go/tree/main/_templates/deno/worker-go) contains all the required files.
+* Go bindings for Deno runtime APIs (`Deno.openKv`, `Deno.env`, `Deno.cron`, ...) are available in the experimental `exp/deno` package, generated from `deno doc --json` by `scripts/gen-deno`.
+
 ## FAQ
 
 ### How do I deploy a worker implemented in this package?

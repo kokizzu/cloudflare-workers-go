@@ -1,0 +1,24 @@
+{
+  "roots": [
+    "openKv",
+    "env",
+    "cron",
+    "args",
+    "pid",
+    "ppid",
+    "noColor",
+    "cwd",
+    "execPath",
+    "hostname",
+    "osRelease",
+    "osUptime",
+    "loadavg",
+    "memoryUsage",
+    "systemMemoryInfo",
+    "networkInterfaces",
+    "version",
+    "mainModule",
+    "uid",
+    "gid"
+  ]
+}
