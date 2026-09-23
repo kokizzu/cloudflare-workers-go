@@ -15,6 +15,7 @@ import (
 var (
 	httpHandler http.Handler
 	doneCh      = make(chan struct{})
+	allDoneCh   = make(chan struct{})
 	doneOnce    sync.Once
 )
 
@@ -22,6 +23,15 @@ func init() {
 	jsutil.RegisterAsyncHandler("handleRequest", 1, func(args []js.Value) (js.Value, error) {
 		return handleRequest(args[0])
 	})
+	go func() {
+		<-doneCh
+		// The program must not exit while background tasks (e.g.
+		// cloudflare.WaitUntil's) are still running: resuming one from a
+		// timer after exit fails under workerd with "Go program has
+		// already exited" and the request is canceled as hung.
+		jsutil.WaitBackgroundTasks()
+		close(allDoneCh)
+	}()
 }
 
 // handleRequest accepts a Request object and returns Response object.
@@ -59,7 +69,10 @@ func Ready() {
 	ready()
 }
 
-// Done returns a channel which is closed when the handler is done.
+// Done returns a channel which is closed when the handler is done: the
+// response body has been fully consumed and all background tasks
+// registered via jsutil.TrackBackgroundTask (e.g. cloudflare.WaitUntil)
+// have returned.
 func Done() <-chan struct{} {
-	return doneCh
+	return allDoneCh
 }

@@ -45,37 +45,6 @@ func awaitRejected(t testing.TB, p js.Value) error {
 	}
 }
 
-// textBody reads a Response's body via the standard text() method (native
-// JS stream consumption) instead of jstest.ReadAll.
-//
-// jstest.ReadAll goes through jsutil's readableStreamToReadCloser, which has
-// a bug (found while writing these tests, not previously covered by any
-// test): the first chunk pulled from a stream created by
-// jsutil.ConvertReaderToReadableStream is always an empty priming chunk
-// (see readerToReadableStream.Pull's `!initialized` branch), and
-// readableStreamToReadCloser.Read writes that empty chunk into a
-// bytes.Buffer and then reads back from the buffer; reading from an empty
-// bytes.Buffer returns io.EOF, so the very first byte-level Read call on
-// any response body produced by an http.Handler in this package incorrectly
-// looks like end-of-stream, and the real content written by the handler is
-// silently lost. Confirmed independently of this package with a throwaway
-// probe test directly against jsutil.ConvertReaderToReadableStream /
-// ConvertReadableStreamToReadCloser. This is a real bug in
-// internal/jsutil/stream.go (not touched here, per the "no non-test code
-// changes" rule for this PR); textBody exists only so the two tests below
-// that need real body content (TestServe_blocksUntilDone,
-// TestHandleRequest_streamingResponse) are not blocked by it. Every other
-// test in this file only needs to drain (not verify the content of) a
-// response body, so it keeps using jstest.ReadAll as the design calls for.
-func textBody(t testing.TB, res js.Value) string {
-	t.Helper()
-	v, err := jsutil.AwaitPromise(res.Call("text"))
-	if err != nil {
-		t.Fatalf("res.text(): %v", err)
-	}
-	return v.String()
-}
-
 // TestReady_callsImport verifies that Ready() reaches the
 // //go:wasmimport workers ready import: the Node test runner
 // (testdata/wasm/wasm_exec_node.js) increments context.readyCount each time
@@ -115,6 +84,14 @@ func TestHandleRequest_beforeServe(t *testing.T) {
 func TestServe_blocksUntilDone(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// A background task that outlives the response (this is what
+		// cloudflare.WaitUntil registers via jsutil.TrackBackgroundTask):
+		// Done must not close - and Serve must not return - while it is
+		// still running, or resuming the parked goroutine would hit
+		// "Go program has already exited".
+		jsutil.TrackBackgroundTask(func() {
+			time.Sleep(300 * time.Millisecond)
+		})
 		w.Write([]byte("ok"))
 	})
 
@@ -133,17 +110,22 @@ func TestServe_blocksUntilDone(t *testing.T) {
 	reqObj := jstest.Request(t, "GET", "http://example.com/", nil, nil)
 	p := jstest.Binding(t, "handleRequest").Invoke(reqObj)
 	res := jstest.Await(t, p)
-	// textBody (not jstest.ReadAll) is used here to read the body: see its
-	// doc comment for why jstest.ReadAll cannot be used to check body
-	// content, only to drain it.
-	if body := textBody(t, res); body != "ok" {
+	if body := string(jstest.ReadAll(t, res.Get("body"))); body != "ok" {
 		t.Errorf("body = %q, want %q", body, "ok")
+	}
+
+	// The response body is fully read, but the tracked background task is
+	// still sleeping: Serve must keep blocking until it finishes.
+	select {
+	case <-serveReturned:
+		t.Fatalf("Serve returned while a background task was still running")
+	case <-time.After(100 * time.Millisecond):
 	}
 
 	select {
 	case <-serveReturned:
 	case <-time.After(5 * time.Second):
-		t.Fatalf("Serve did not return after the response body was fully read")
+		t.Fatalf("Serve did not return after the background task finished")
 	}
 }
 
@@ -317,10 +299,7 @@ func TestHandleRequest_streamingResponse(t *testing.T) {
 	res := jstest.Await(t, p)
 	close(proceed)
 
-	// textBody (not jstest.ReadAll) is used here to read the body: see its
-	// doc comment for why jstest.ReadAll cannot be used to check body
-	// content, only to drain it.
-	if body := textBody(t, res); body != "first-second" {
+	if body := string(jstest.ReadAll(t, res.Get("body"))); body != "first-second" {
 		t.Errorf("body = %q, want %q", body, "first-second")
 	}
 }

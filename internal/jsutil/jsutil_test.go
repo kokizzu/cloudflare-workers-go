@@ -17,6 +17,7 @@ func TestMaybeString(t *testing.T) {
 		want string
 	}{
 		{"undefined", js.Undefined(), ""},
+		{"null", Null, ""},
 		{"value", js.ValueOf("hello"), "hello"},
 	}
 	for _, tt := range tests {
@@ -26,10 +27,6 @@ func TestMaybeString(t *testing.T) {
 			}
 		})
 	}
-
-	t.Run("null", func(t *testing.T) {
-		t.Skip("known issue: null is not treated as zero value")
-	})
 }
 
 func TestMaybeInt(t *testing.T) {
@@ -39,6 +36,7 @@ func TestMaybeInt(t *testing.T) {
 		want int
 	}{
 		{"undefined", js.Undefined(), 0},
+		{"null", Null, 0},
 		{"value", js.ValueOf(42), 42},
 	}
 	for _, tt := range tests {
@@ -48,10 +46,6 @@ func TestMaybeInt(t *testing.T) {
 			}
 		})
 	}
-
-	t.Run("null", func(t *testing.T) {
-		t.Skip("known issue: null is not treated as zero value")
-	})
 }
 
 func TestMaybeDate(t *testing.T) {
@@ -65,6 +59,16 @@ func TestMaybeDate(t *testing.T) {
 		}
 	})
 
+	t.Run("null", func(t *testing.T) {
+		got, err := MaybeDate(Null)
+		if err != nil {
+			t.Fatalf("MaybeDate(null) error = %v, want nil", err)
+		}
+		if !got.IsZero() {
+			t.Errorf("MaybeDate(null) = %v, want zero value", got)
+		}
+	})
+
 	t.Run("value", func(t *testing.T) {
 		want := time.Date(2024, time.March, 5, 12, 34, 56, 0, time.UTC)
 		got, err := MaybeDate(TimeToDate(want))
@@ -75,10 +79,64 @@ func TestMaybeDate(t *testing.T) {
 			t.Errorf("MaybeDate(value) = %v, want %v", got, want)
 		}
 	})
+}
 
-	t.Run("null", func(t *testing.T) {
-		t.Skip("known issue: null is not treated as zero value")
-	})
+func TestMaybeBool(t *testing.T) {
+	tests := []struct {
+		name string
+		in   js.Value
+		want bool
+	}{
+		{"undefined", js.Undefined(), false},
+		{"null", Null, false},
+		{"value", js.ValueOf(true), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := MaybeBool(tt.in); got != tt.want {
+				t.Errorf("MaybeBool(%v) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMaybeFloat(t *testing.T) {
+	tests := []struct {
+		name string
+		in   js.Value
+		want float64
+	}{
+		{"undefined", js.Undefined(), 0},
+		{"null", Null, 0},
+		{"value", js.ValueOf(1.5), 1.5},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := MaybeFloat(tt.in); got != tt.want {
+				t.Errorf("MaybeFloat(%v) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMaybeStringSlice(t *testing.T) {
+	arr := js.ValueOf([]any{"a", "b"})
+	tests := []struct {
+		name string
+		in   js.Value
+		want []string
+	}{
+		{"undefined", js.Undefined(), nil},
+		{"null", Null, nil},
+		{"value", arr, []string{"a", "b"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := MaybeStringSlice(tt.in); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("MaybeStringSlice(%v) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
 }
 
 func TestDateToTime_TimeToDate_roundTrip(t *testing.T) {
@@ -181,14 +239,6 @@ func TestAwaitPromise(t *testing.T) {
 	})
 
 	t.Run("rejected_with_string", func(t *testing.T) {
-		// known issue: AwaitPromise's catch handler calls result.Call("toString"),
-		// which syscall/js only allows on object values. When a Promise
-		// rejects with a plain (non-Error) value such as a string, that
-		// call panics instead of returning an error, which crashes the
-		// whole test binary (not just this subtest). Skip before ever
-		// constructing that promise.
-		t.Skip("known issue: AwaitPromise panics (not just errors) on a non-object rejection value")
-
 		_, err := AwaitPromise(jsPromise(t, nil, "plain string rejection"))
 		if err == nil {
 			t.Fatalf("AwaitPromise() error = nil, want non-nil")

@@ -9,12 +9,9 @@ import (
 
 func TestTryCatch(t *testing.T) {
 	t.Run("returns_value", func(t *testing.T) {
-		fn := js.FuncOf(func(_ js.Value, _ []js.Value) any {
+		got, err := TryCatch(func() js.Value {
 			return js.ValueOf("ok")
 		})
-		defer fn.Release()
-
-		got, err := TryCatch(fn)
 		if err != nil {
 			t.Fatalf("TryCatch() error = %v, want nil", err)
 		}
@@ -24,12 +21,9 @@ func TestTryCatch(t *testing.T) {
 	})
 
 	t.Run("returns_undefined", func(t *testing.T) {
-		fn := js.FuncOf(func(_ js.Value, _ []js.Value) any {
+		got, err := TryCatch(func() js.Value {
 			return js.Undefined()
 		})
-		defer fn.Release()
-
-		got, err := TryCatch(fn)
 		if err != nil {
 			t.Fatalf("TryCatch() error = %v, want nil", err)
 		}
@@ -39,22 +33,26 @@ func TestTryCatch(t *testing.T) {
 	})
 
 	t.Run("throws", func(t *testing.T) {
-		// TryCatch's contract (see cloudflare/sockets.Connect) is to run fn
-		// via globalThis.tryCatch's try/catch, converting a JS-side throw
-		// into a Go error. In production, fn's body typically triggers that
-		// throw by calling a JS function that fails (e.g. Value.Invoke on a
-		// connect() call the runtime rejects), which makes Go's
-		// syscall/js panic (Value.Invoke/Call panics on failure) from
-		// *inside* the js.FuncOf callback that globalThis.tryCatch's try
-		// block is running.
-		//
-		// That panic does not behave like a normal, isolated Go panic here:
-		// this callback is invoked reentrantly (Go test -> tryCatch (JS) ->
-		// fn (Go) ), and panicking in that nested position was observed to
-		// hang the whole Node process indefinitely instead of being
-		// surfaced to the outer try/catch or crashing cleanly, which would
-		// hang `make test` itself. So this subtest cannot safely exercise
-		// that path.
-		t.Skip("known issue: a panic raised from inside the fn passed to TryCatch hangs the process instead of being caught, so this path can't be safely tested here")
+		// A JS call that throws inside fn surfaces as a Go panic from
+		// Value.Call; TryCatch's wrapper recovers it into an error.
+		if _, err := TryCatch(func() js.Value {
+			js.Global().Call("eval", "throw new Error('js throw')")
+			return js.Undefined()
+		}); err == nil {
+			t.Fatal("TryCatch() error = nil, want non-nil for a JS throw")
+		}
+	})
+
+	t.Run("panics", func(t *testing.T) {
+		// fn panics on the Go side - e.g. Value.Invoke failing, which is
+		// how cloudflare/sockets.Connect surfaces a rejected connect()
+		// call. The panic is recovered inside the js.FuncOf callback;
+		// letting it escape in this reentrant position hangs the process.
+		got, err := TryCatch(func() js.Value {
+			panic("go panic")
+		})
+		if err == nil {
+			t.Fatalf("TryCatch() = %v, nil; want a non-nil error for a Go panic", got)
+		}
 	})
 }

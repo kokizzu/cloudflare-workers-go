@@ -81,19 +81,4 @@ Package-specific fakes (`fake_kv_test.go`, `fake_bucket_test.go`,
 
 ## Known issues pinned by skipped tests
 
-Search for `t.Skip("known issue` to find them. At the time of writing:
-
-- `internal/jsutil`: `MaybeString` / `MaybeInt` / `MaybeDate` treat `null` as
-  a value, not as zero; `AwaitPromise` panics when a Promise rejects with a
-  non-object; a panic inside the function passed to `TryCatch` hangs the
-  process; reading a `ConvertReaderToReadableStream` stream back through
-  `ConvertReadableStreamToReadCloser` returns EOF before any data (the
-  priming empty chunk).
-- `internal/jshttp`: `ToHeader` splits values on `,` (breaks `Set-Cookie`);
-  `ToRequest` drops `Transfer-Encoding` values after the first comma;
-  `ToJSRequest` does not set `duplex: "half"` for streaming bodies.
-- `cloudflare/cron`: `scheduledTime` loses milliseconds.
-- `exp/hono`: a rejected `next()` is swallowed.
-- `cloudflare.WaitUntil`: resuming a goroutine from a timer inside the
-  `waitUntil` callback fails with "Go program has already exited" under
-  workerd (E2E `waituntil/runs_after_response`).
+Search for `t.Skip("known issue` to find them. There are currently none.

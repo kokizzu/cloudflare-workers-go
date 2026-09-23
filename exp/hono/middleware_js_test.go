@@ -10,32 +10,6 @@ import (
 	"github.com/syumai/workers-go/internal/jsutil"
 )
 
-// textFromStream reads a JS ReadableStream via the standard text() method
-// (native JS stream consumption) by wrapping it in a throwaway Response,
-// instead of jstest.ReadAll.
-//
-// jstest.ReadAll goes through jsutil's readableStreamToReadCloser, which has
-// a bug (found while writing the root package's handler_js_test.go, not
-// previously covered by any test): the first chunk pulled from a stream
-// created by jsutil.ConvertReaderToReadableStream (as convertBodyToJS does
-// for any body that is not already a jsutil.RawJSBodyGetter, e.g. the
-// io.NopCloser(strings.NewReader(...)) used below) is always an empty
-// priming chunk, and readableStreamToReadCloser.Read mishandles it as
-// end-of-stream, silently losing the real content. See handler_js_test.go's
-// textBody doc comment for the full explanation. This is a real bug in
-// internal/jsutil/stream.go (not touched here, per the "no non-test code
-// changes" rule for this PR); textFromStream exists only so
-// TestRunHonoMiddleware_setHeaderStatusBody is not blocked by it.
-func textFromStream(t testing.TB, stream js.Value) string {
-	t.Helper()
-	res := jsutil.ResponseClass.New(stream, jsutil.NewObject())
-	v, err := jsutil.AwaitPromise(res.Call("text"))
-	if err != nil {
-		t.Fatalf("res.text(): %v", err)
-	}
-	return v.String()
-}
-
 // TestRunHonoMiddleware_callsNext verifies that runHonoMiddleware
 // (registered on jsutil.Binding as "runHonoMiddleware" by this package's
 // init) builds a *Context from context.ctx (here, a fakeHonoContext acting
@@ -111,28 +85,37 @@ func TestRunHonoMiddleware_setHeaderStatusBody(t *testing.T) {
 	if len(bodyCalls) != 1 {
 		t.Fatalf("body() calls = %d, want 1", len(bodyCalls))
 	}
-	// textFromStream (not jstest.ReadAll) is used here to read the body:
-	// see its doc comment for why jstest.ReadAll cannot be used to check
-	// body content.
-	if got := textFromStream(t, bodyCalls[0]); got != "hi" {
+	if got := string(jstest.ReadAll(t, bodyCalls[0])); got != "hi" {
 		t.Errorf("body() argument content = %q, want %q", got, "hi")
 	}
 }
 
-// TestRunHonoMiddleware_nextRejects documents a known issue found while
-// writing this test: middleware.go's next function
-// (`jsutil.AwaitPromise(nextFnObj.Invoke())`) discards the error that
-// AwaitPromise returns when the JS-side next() Promise rejects. So a
-// middleware has no way to observe that next() failed, and
-// runHonoMiddleware's own Promise still resolves instead of rejecting -
-// unlike what the binding contract would suggest (the JS next() argument
-// models Hono's own middleware chaining, where a downstream failure should
-// be observable).
-//
-// Confirmed empirically with a throwaway probe test: a JS next callback
-// that returns a rejected Promise, invoked the same way as
-// TestRunHonoMiddleware_callsNext, still resulted in the middleware running
-// past next() and the outer Promise resolving successfully.
+// TestRunHonoMiddleware_nextRejects verifies that a rejected JS-side
+// next() is propagated: the Middleware signature keeps next as func(),
+// so runHonoMiddleware captures the error and returns it after the
+// middleware finishes, rejecting the Promise returned to the JS caller.
 func TestRunHonoMiddleware_nextRejects(t *testing.T) {
-	t.Skip("known issue: middleware.go's next() discards the error from jsutil.AwaitPromise(nextFnObj.Invoke()), so a middleware can never observe (nor propagate) a rejected next() - runHonoMiddleware's Promise resolves instead of rejecting")
+	reqObj := jstest.Request(t, "GET", "http://example.com/", nil, nil)
+	fake := newFakeHonoContext(t, reqObj)
+	jstest.SetRuntimeContext(t, jstest.RuntimeContext{Ctx: fake.Value()})
+
+	var ranPastNext bool
+	middleware = func(c *Context, next func()) {
+		next()
+		// The middleware itself continues running after a rejected
+		// next(); the rejection is reported by runHonoMiddleware.
+		ranPastNext = true
+	}
+	t.Cleanup(func() { middleware = nil })
+
+	nextFn := jstest.Func(t, func(_ js.Value, _ []js.Value) any {
+		return jstest.Rejected("downstream failed")
+	})
+	p := jstest.Binding(t, "runHonoMiddleware").Invoke(nextFn)
+	if _, err := jsutil.AwaitPromise(p); err == nil {
+		t.Fatal("runHonoMiddleware's Promise resolved, want a rejection after next() rejected")
+	}
+	if !ranPastNext {
+		t.Error("middleware did not run past next(); middleware body should still complete before the rejection is reported")
+	}
 }

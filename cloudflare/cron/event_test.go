@@ -14,7 +14,7 @@ import (
 func TestNewEvent(t *testing.T) {
 	t.Run("second_precision", func(t *testing.T) {
 		// scheduledTime falls on a whole second (no milliseconds), which
-		// event.go's time.Unix(x/1000, 0) handles correctly.
+		// event.go's time.UnixMilli handles the same as before.
 		obj := js.ValueOf(map[string]any{
 			"cron":          "* * * * *",
 			"scheduledTime": 1700000000000.0,
@@ -34,9 +34,7 @@ func TestNewEvent(t *testing.T) {
 		}
 	})
 
-	t.Run("milliseconds_are_lost", func(t *testing.T) {
-		t.Skip("known issue: scheduledTime loses milliseconds; event.go uses time.Unix(x/1000, 0) instead of time.UnixMilli(x) (see 02-unit-test-catalog.md, cloudflare/cron). Fixing this is a separate PR.")
-
+	t.Run("milliseconds_preserved", func(t *testing.T) {
 		obj := js.ValueOf(map[string]any{
 			"cron":          "*/5 * * * *",
 			"scheduledTime": 1700000000123.0,

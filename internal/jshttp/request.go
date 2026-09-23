@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"syscall/js"
 
 	"github.com/syumai/workers-go/internal/jsutil"
@@ -43,7 +42,7 @@ func ToRequest(req js.Value) (*http.Request, error) {
 		Header:           header,
 		Body:             ToBody(bodyVal),
 		ContentLength:    contentLength,
-		TransferEncoding: strings.Split(header.Get("Transfer-Encoding"), ","),
+		TransferEncoding: header.Values("Transfer-Encoding"),
 		Host:             header.Get("Host"),
 		RemoteAddr:       header.Get("Cf-Connecting-Ip"),
 	}, nil
@@ -58,6 +57,11 @@ func ToJSRequest(req *http.Request) js.Value {
 	jsReqBody := js.Undefined()
 	if req.Body != nil {
 		jsReqBody = jsutil.ConvertReaderToReadableStream(req.Body)
+		// The Fetch spec requires the duplex option when a Request is
+		// constructed with a streaming body; undici (Node) throws
+		// without it. workerd ignores the option.
+		//   - https://fetch.spec.whatwg.org/#dom-requestinit-duplex
+		jsReqOptions.Set("duplex", "half")
 	}
 	jsReqOptions.Set("body", jsReqBody)
 	jsReq := jsutil.RequestClass.New(req.URL.String(), jsReqOptions)
