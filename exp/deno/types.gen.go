@@ -9,12 +9,71 @@ import (
 	"syscall/js"
 )
 
+// **UNSTABLE**: New API, yet to be vetted.
+//
+// CronScheduleExpression is used as the type of `minute`, `hour`,
+// `dayOfMonth`, `month`, and `dayOfWeek` in {@linkcode CronSchedule}.
+//   - https://docs.deno.com/api/deno/~/Deno.CronScheduleExpression
 type CronScheduleExpression = any
 
+// **UNSTABLE**: New API, yet to be vetted.
+//
+// A key to be persisted in a {@linkcode Deno.Kv}. A key is a sequence
+// of {@linkcode Deno.KvKeyPart}s.
+//
+// Keys are ordered lexicographically by their parts. The first part is the
+// most significant, and the last part is the least significant. The order of
+// the parts is determined by both the type and the value of the part. The
+// relative significance of the types can be found in documentation for the
+// {@linkcode Deno.KvKeyPart} type.
+//
+// Keys have a maximum size of 2048 bytes serialized. If the size of the key
+// exceeds this limit, an error will be thrown on the operation that this key
+// was passed to.
+//   - https://docs.deno.com/api/deno/~/Deno.KvKey
 type KvKey = []KvKeyPart
 
+// **UNSTABLE**: New API, yet to be vetted.
+//
+// A single part of a {@linkcode Deno.KvKey}. Parts are ordered
+// lexicographically, first by their type, and within a given type by their
+// value.
+//
+// The ordering of types is as follows:
+//
+// 1. `Uint8Array`
+// 2. `string`
+// 3. `number`
+// 4. `bigint`
+// 5. `boolean`
+//
+// Within a given type, the ordering is as follows:
+//
+//   - `Uint8Array` is ordered by the byte ordering of the array
+//   - `string` is ordered by the byte ordering of the UTF-8 encoding of the
+//     string
+//   - `number` is ordered following this pattern: `-NaN`
+//     < `-Infinity` < `-100.0` < `-1.0` < -`0.5` < `-0.0` < `0.0` < `0.5`
+//     < `1.0` < `100.0` < `Infinity` < `NaN`
+//   - `bigint` is ordered by mathematical ordering, with the largest negative
+//     number being the least first value, and the largest positive number
+//     being the last value
+//   - `boolean` is ordered by `false` < `true`
+//
+// This means that the part `1.0` (a number) is ordered before the part `2.0`
+// (also a number), but is greater than the part `0n` (a bigint), because
+// `1.0` is a number and `0n` is a bigint, and type ordering has precedence
+// over the ordering of values within a type.
+//   - https://docs.deno.com/api/deno/~/Deno.KvKeyPart
 type KvKeyPart = any
 
+// **UNSTABLE**: New API, yet to be vetted.
+//
+// Consistency level of a KV operation.
+//
+// - `strong` - This operation must be strongly-consistent.
+// - `eventual` - Eventually-consistent behavior is allowed.
+//   - https://docs.deno.com/api/deno/~/Deno.KvConsistencyLevel
 type KvConsistencyLevel = string
 
 const (
@@ -22,14 +81,21 @@ const (
 	KvConsistencyLevelEventual KvConsistencyLevel = "eventual"
 )
 
+// - https://docs.deno.com/api/deno/~/Deno.MemoryUsage
 type MemoryUsage struct {
-	Rss       float64
+	// The number of bytes of the current Deno's process resident set size,
+	// which is the amount of memory occupied in main memory (RAM).
+	Rss float64
+	// The total size of the heap for V8, in bytes.
 	HeapTotal float64
-	HeapUsed  float64
-	External  float64
+	// The amount of the heap used for V8, in bytes.
+	HeapUsed float64
+	// Memory, in bytes, associated with JavaScript objects outside of the
+	// JavaScript isolate.
+	External float64
 }
 
-func (x MemoryUsage) ToJS() js.Value {
+func (x MemoryUsage) toJS() js.Value {
 	o := jsutil.NewObject()
 	o.Set("rss", js.ValueOf(x.Rss))
 	o.Set("heapTotal", js.ValueOf(x.HeapTotal))
@@ -38,7 +104,7 @@ func (x MemoryUsage) ToJS() js.Value {
 	return o
 }
 
-func MemoryUsageFromJS(v js.Value) MemoryUsage {
+func memoryUsageFromJS(v js.Value) MemoryUsage {
 	var x MemoryUsage
 	if isNullish(v) {
 		return x
@@ -50,17 +116,27 @@ func MemoryUsageFromJS(v js.Value) MemoryUsage {
 	return x
 }
 
+// The information for a network interface returned from a call to
+// {@linkcode Deno.networkInterfaces}.
+//   - https://docs.deno.com/api/deno/~/Deno.NetworkInterfaceInfo
 type NetworkInterfaceInfo struct {
-	Name    string
-	Family  string
+	// The network interface name.
+	Name string
+	// The IP protocol version.
+	Family string
+	// The IP address bound to the interface.
 	Address string
+	// The netmask applied to the interface.
 	Netmask string
+	// The IPv6 scope id or `null`.
 	Scopeid *float64
-	Cidr    string
-	Mac     string
+	// The CIDR range.
+	Cidr string
+	// The MAC address.
+	Mac string
 }
 
-func (x NetworkInterfaceInfo) ToJS() js.Value {
+func (x NetworkInterfaceInfo) toJS() js.Value {
 	o := jsutil.NewObject()
 	o.Set("name", js.ValueOf(x.Name))
 	o.Set("family", js.ValueOf(x.Family))
@@ -76,7 +152,7 @@ func (x NetworkInterfaceInfo) ToJS() js.Value {
 	return o
 }
 
-func NetworkInterfaceInfoFromJS(v js.Value) NetworkInterfaceInfo {
+func networkInterfaceInfoFromJS(v js.Value) NetworkInterfaceInfo {
 	var x NetworkInterfaceInfo
 	if isNullish(v) {
 		return x
@@ -91,17 +167,29 @@ func NetworkInterfaceInfoFromJS(v js.Value) NetworkInterfaceInfo {
 	return x
 }
 
+// Information returned from a call to {@linkcode Deno.systemMemoryInfo}.
+//   - https://docs.deno.com/api/deno/~/Deno.SystemMemoryInfo
 type SystemMemoryInfo struct {
-	Total     float64
-	Free      float64
+	// Total installed memory in bytes.
+	Total float64
+	// Unused memory in bytes.
+	Free float64
+	// Estimation of how much memory, in bytes, is available for starting new
+	// applications, without swapping. Unlike the data provided by the cache or
+	// free fields, this field takes into account page cache and also that not
+	// all reclaimable memory will be reclaimed due to items being in use.
 	Available float64
-	Buffers   float64
-	Cached    float64
+	// Memory used by kernel buffers.
+	Buffers float64
+	// Memory used by the page cache and slabs.
+	Cached float64
+	// Total swap memory.
 	SwapTotal float64
-	SwapFree  float64
+	// Unused swap memory.
+	SwapFree float64
 }
 
-func (x SystemMemoryInfo) ToJS() js.Value {
+func (x SystemMemoryInfo) toJS() js.Value {
 	o := jsutil.NewObject()
 	o.Set("total", js.ValueOf(x.Total))
 	o.Set("free", js.ValueOf(x.Free))
@@ -113,7 +201,7 @@ func (x SystemMemoryInfo) ToJS() js.Value {
 	return o
 }
 
-func SystemMemoryInfoFromJS(v js.Value) SystemMemoryInfo {
+func systemMemoryInfoFromJS(v js.Value) SystemMemoryInfo {
 	var x SystemMemoryInfo
 	if isNullish(v) {
 		return x
@@ -128,6 +216,11 @@ func SystemMemoryInfoFromJS(v js.Value) SystemMemoryInfo {
 	return x
 }
 
+// **UNSTABLE**: New API, yet to be vetted.
+//
+// CronSchedule is the interface used for JSON format
+// cron `schedule`.
+//   - https://docs.deno.com/api/deno/~/Deno.CronSchedule
 type CronSchedule struct {
 	Minute     CronScheduleExpression
 	Hour       CronScheduleExpression
@@ -136,7 +229,7 @@ type CronSchedule struct {
 	DayOfWeek  CronScheduleExpression
 }
 
-func (x CronSchedule) ToJS() js.Value {
+func (x CronSchedule) toJS() js.Value {
 	o := jsutil.NewObject()
 	if x.Minute != nil {
 		o.Set("minute", anyToJS(x.Minute))
@@ -156,7 +249,7 @@ func (x CronSchedule) ToJS() js.Value {
 	return o
 }
 
-func CronScheduleFromJS(v js.Value) CronSchedule {
+func cronScheduleFromJS(v js.Value) CronSchedule {
 	var x CronSchedule
 	if isNullish(v) {
 		return x
@@ -169,13 +262,23 @@ func CronScheduleFromJS(v js.Value) CronSchedule {
 	return x
 }
 
+// **UNSTABLE**: New API, yet to be vetted.
+//
+// A selector that selects the range of data returned by a list operation on a
+// {@linkcode Deno.Kv}.
+//
+// The selector can either be a prefix selector or a range selector. A prefix
+// selector selects all keys that start with the given prefix (optionally
+// starting at a given key). A range selector selects all keys that are
+// lexicographically between the given start and end keys.
+//   - https://docs.deno.com/api/deno/~/Deno.KvListSelector
 type KvListSelector struct {
 	Prefix KvKey
 	Start  KvKey
 	End    KvKey
 }
 
-func (x KvListSelector) ToJS() js.Value {
+func (x KvListSelector) toJS() js.Value {
 	o := jsutil.NewObject()
 	if x.Prefix != nil {
 		o.Set("prefix", sliceToJS(x.Prefix, func(e KvKeyPart) js.Value { return anyToJS(e) }))
@@ -189,7 +292,7 @@ func (x KvListSelector) ToJS() js.Value {
 	return o
 }
 
-func KvListSelectorFromJS(v js.Value) KvListSelector {
+func kvListSelectorFromJS(v js.Value) KvListSelector {
 	var x KvListSelector
 	if isNullish(v) {
 		return x
@@ -200,6 +303,36 @@ func KvListSelectorFromJS(v js.Value) KvListSelector {
 	return x
 }
 
+// **UNSTABLE**: New API, yet to be vetted.
+//
+// A mutation to a key in a {@linkcode Deno.Kv}. A mutation is a
+// combination of a key, a value, and a type. The type determines how the
+// mutation is applied to the key.
+//
+//   - `set` - Sets the value of the key to the given value, overwriting any
+//     existing value. Optionally an `expireIn` option can be specified to
+//     set a time-to-live (TTL) for the key. The TTL is specified in
+//     milliseconds, and the key will be deleted from the database at earliest
+//     after the specified number of milliseconds have elapsed. Once the
+//     specified duration has passed, the key may still be visible for some
+//     additional time. If the `expireIn` option is not specified, the key will
+//     not expire.
+//   - `delete` - Deletes the key from the database. The mutation is a no-op if
+//     the key does not exist.
+//   - `sum` - Adds the given value to the existing value of the key. Both the
+//     value specified in the mutation, and any existing value must be of type
+//     `Deno.KvU64`. If the key does not exist, the value is set to the given
+//     value (summed with 0). If the result of the sum overflows an unsigned
+//     64-bit integer, the result is wrapped around.
+//   - `max` - Sets the value of the key to the maximum of the existing value
+//     and the given value. Both the value specified in the mutation, and any
+//     existing value must be of type `Deno.KvU64`. If the key does not exist,
+//     the value is set to the given value.
+//   - `min` - Sets the value of the key to the minimum of the existing value
+//     and the given value. Both the value specified in the mutation, and any
+//     existing value must be of type `Deno.KvU64`. If the key does not exist,
+//     the value is set to the given value.
+//   - https://docs.deno.com/api/deno/~/Deno.KvMutation
 type KvMutation struct {
 	Key      KvKey
 	Type     string
@@ -207,7 +340,7 @@ type KvMutation struct {
 	ExpireIn *float64
 }
 
-func (x KvMutation) ToJS() js.Value {
+func (x KvMutation) toJS() js.Value {
 	o := jsutil.NewObject()
 	o.Set("key", sliceToJS(x.Key, func(e KvKeyPart) js.Value { return anyToJS(e) }))
 	o.Set("type", js.ValueOf(x.Type))
@@ -220,7 +353,7 @@ func (x KvMutation) ToJS() js.Value {
 	return o
 }
 
-func KvMutationFromJS(v js.Value) KvMutation {
+func kvMutationFromJS(v js.Value) KvMutation {
 	var x KvMutation
 	if isNullish(v) {
 		return x
@@ -232,13 +365,21 @@ func KvMutationFromJS(v js.Value) KvMutation {
 	return x
 }
 
+// **UNSTABLE**: New API, yet to be vetted.
+//
+// A versioned pair of key and value in a {@linkcode Deno.Kv}.
+//
+// The `versionstamp` is a string that represents the current version of the
+// key-value pair. It can be used to perform atomic operations on the KV store
+// by passing it to the `check` method of a {@linkcode Deno.AtomicOperation}.
+//   - https://docs.deno.com/api/deno/~/Deno.KvEntry
 type KvEntry struct {
 	Key          KvKey
 	Value        any
 	Versionstamp string
 }
 
-func (x KvEntry) ToJS() js.Value {
+func (x KvEntry) toJS() js.Value {
 	o := jsutil.NewObject()
 	o.Set("key", sliceToJS(x.Key, func(e KvKeyPart) js.Value { return anyToJS(e) }))
 	o.Set("value", anyToJS(x.Value))
@@ -246,7 +387,7 @@ func (x KvEntry) ToJS() js.Value {
 	return o
 }
 
-func KvEntryFromJS(v js.Value) KvEntry {
+func kvEntryFromJS(v js.Value) KvEntry {
 	var x KvEntry
 	if isNullish(v) {
 		return x
@@ -257,13 +398,20 @@ func KvEntryFromJS(v js.Value) KvEntry {
 	return x
 }
 
+// **UNSTABLE**: New API, yet to be vetted.
+//
+// An optional versioned pair of key and value in a {@linkcode Deno.Kv}.
+//
+// This is the same as a {@linkcode KvEntry}, but the `value` and `versionstamp`
+// fields may be `null` if no value exists for the given key in the KV store.
+//   - https://docs.deno.com/api/deno/~/Deno.KvEntryMaybe
 type KvEntryMaybe struct {
 	Key          KvKey
 	Value        any
 	Versionstamp *string
 }
 
-func (x KvEntryMaybe) ToJS() js.Value {
+func (x KvEntryMaybe) toJS() js.Value {
 	o := jsutil.NewObject()
 	o.Set("key", sliceToJS(x.Key, func(e KvKeyPart) js.Value { return anyToJS(e) }))
 	o.Set("value", anyToJS(x.Value))
@@ -275,7 +423,7 @@ func (x KvEntryMaybe) ToJS() js.Value {
 	return o
 }
 
-func KvEntryMaybeFromJS(v js.Value) KvEntryMaybe {
+func kvEntryMaybeFromJS(v js.Value) KvEntryMaybe {
 	var x KvEntryMaybe
 	if isNullish(v) {
 		return x
@@ -286,15 +434,52 @@ func KvEntryMaybeFromJS(v js.Value) KvEntryMaybe {
 	return x
 }
 
+// **UNSTABLE**: New API, yet to be vetted.
+//
+// Options for listing key-value pairs in a {@linkcode Deno.Kv}.
+//   - https://docs.deno.com/api/deno/~/Deno.KvListOptions
 type KvListOptions struct {
-	Limit       *float64
-	Cursor      *string
-	Reverse     *bool
+	// The maximum number of key-value pairs to return. If not specified, all
+	// matching key-value pairs will be returned.
+	Limit *float64
+	// The cursor to resume the iteration from. If not specified, the iteration
+	// will start from the beginning.
+	Cursor *string
+	// Whether to reverse the order of the returned key-value pairs. If not
+	// specified, the order will be ascending from the start of the range as per
+	// the lexicographical ordering of the keys. If `true`, the order will be
+	// descending from the end of the range.
+	//
+	// The default value is `false`.
+	Reverse *bool
+	// The consistency level of the list operation. The default consistency
+	// level is "strong". Some use cases can benefit from using a weaker
+	// consistency level. For more information on consistency levels, see the
+	// documentation for {@linkcode Deno.KvConsistencyLevel}.
+	//
+	// List operations are performed in batches (in sizes specified by the
+	// `batchSize` option). The consistency level of the list operation is
+	// applied to each batch individually. This means that while each batch is
+	// guaranteed to be consistent within itself, the entire list operation may
+	// not be consistent across batches because a mutation may be applied to a
+	// key-value pair between batches, in a batch that has already been returned
+	// by the list operation.
 	Consistency *KvConsistencyLevel
-	BatchSize   *float64
+	// The size of the batches in which the list operation is performed. Larger
+	// or smaller batch sizes may positively or negatively affect the
+	// performance of a list operation depending on the specific use case and
+	// iteration behavior. Slow iterating queries may benefit from using a
+	// smaller batch size for increased overall consistency, while fast
+	// iterating queries may benefit from using a larger batch size for better
+	// performance.
+	//
+	// The default batch size is equal to the `limit` option, or 100 if this is
+	// unset. The maximum value for this option is 500. Larger values will be
+	// clamped.
+	BatchSize *float64
 }
 
-func (x KvListOptions) ToJS() js.Value {
+func (x KvListOptions) toJS() js.Value {
 	o := jsutil.NewObject()
 	if x.Limit != nil {
 		o.Set("limit", js.ValueOf(*x.Limit))
@@ -314,7 +499,7 @@ func (x KvListOptions) ToJS() js.Value {
 	return o
 }
 
-func KvListOptionsFromJS(v js.Value) KvListOptions {
+func kvListOptionsFromJS(v js.Value) KvListOptions {
 	var x KvListOptions
 	if isNullish(v) {
 		return x
@@ -327,19 +512,21 @@ func KvListOptionsFromJS(v js.Value) KvListOptions {
 	return x
 }
 
+// - https://docs.deno.com/api/deno/~/Deno.KvCommitResult
 type KvCommitResult struct {
-	Ok           bool
+	Ok bool
+	// The versionstamp of the value committed to KV.
 	Versionstamp string
 }
 
-func (x KvCommitResult) ToJS() js.Value {
+func (x KvCommitResult) toJS() js.Value {
 	o := jsutil.NewObject()
 	o.Set("ok", js.ValueOf(x.Ok))
 	o.Set("versionstamp", js.ValueOf(x.Versionstamp))
 	return o
 }
 
-func KvCommitResultFromJS(v js.Value) KvCommitResult {
+func kvCommitResultFromJS(v js.Value) KvCommitResult {
 	var x KvCommitResult
 	if isNullish(v) {
 		return x
@@ -349,17 +536,18 @@ func KvCommitResultFromJS(v js.Value) KvCommitResult {
 	return x
 }
 
+// - https://docs.deno.com/api/deno/~/Deno.KvCommitError
 type KvCommitError struct {
 	Ok bool
 }
 
-func (x KvCommitError) ToJS() js.Value {
+func (x KvCommitError) toJS() js.Value {
 	o := jsutil.NewObject()
 	o.Set("ok", js.ValueOf(x.Ok))
 	return o
 }
 
-func KvCommitErrorFromJS(v js.Value) KvCommitError {
+func kvCommitErrorFromJS(v js.Value) KvCommitError {
 	var x KvCommitError
 	if isNullish(v) {
 		return x
@@ -368,12 +556,19 @@ func KvCommitErrorFromJS(v js.Value) KvCommitError {
 	return x
 }
 
+// **UNSTABLE**: New API, yet to be vetted.
+//
+// A check to perform as part of a {@linkcode Deno.AtomicOperation}. The check
+// will fail if the versionstamp for the key-value pair in the KV store does
+// not match the given versionstamp. A check with a `null` versionstamp checks
+// that the key-value pair does not currently exist in the KV store.
+//   - https://docs.deno.com/api/deno/~/Deno.AtomicCheck
 type AtomicCheck struct {
 	Key          KvKey
 	Versionstamp *string
 }
 
-func (x AtomicCheck) ToJS() js.Value {
+func (x AtomicCheck) toJS() js.Value {
 	o := jsutil.NewObject()
 	o.Set("key", sliceToJS(x.Key, func(e KvKeyPart) js.Value { return anyToJS(e) }))
 	if x.Versionstamp == nil {
@@ -384,7 +579,7 @@ func (x AtomicCheck) ToJS() js.Value {
 	return o
 }
 
-func AtomicCheckFromJS(v js.Value) AtomicCheck {
+func atomicCheckFromJS(v js.Value) AtomicCheck {
 	var x AtomicCheck
 	if isNullish(v) {
 		return x
@@ -395,12 +590,21 @@ func AtomicCheckFromJS(v js.Value) AtomicCheck {
 }
 
 type Version struct {
-	Deno       string
-	V8         string
+	// Deno CLI's version. For example: `"1.26.0"`.
+	Deno string
+	// The V8 version used by Deno. For example: `"10.7.100.0"`.
+	//
+	// V8 is the underlying JavaScript runtime platform that Deno is built on
+	// top of.
+	V8 string
+	// The TypeScript version used by Deno. For example: `"4.8.3"`.
+	//
+	// A version of the TypeScript type checker and language server is built-in
+	// to the Deno CLI.
 	Typescript string
 }
 
-func (x Version) ToJS() js.Value {
+func (x Version) toJS() js.Value {
 	o := jsutil.NewObject()
 	o.Set("deno", js.ValueOf(x.Deno))
 	o.Set("v8", js.ValueOf(x.V8))
@@ -408,7 +612,7 @@ func (x Version) ToJS() js.Value {
 	return o
 }
 
-func VersionFromJS(v js.Value) Version {
+func versionFromJS(v js.Value) Version {
 	var x Version
 	if isNullish(v) {
 		return x
@@ -424,7 +628,7 @@ type CronOptions struct {
 	Signal          js.Value
 }
 
-func (x CronOptions) ToJS() js.Value {
+func (x CronOptions) toJS() js.Value {
 	o := jsutil.NewObject()
 	if x.BackoffSchedule != nil {
 		o.Set("backoffSchedule", sliceToJS(x.BackoffSchedule, func(e float64) js.Value { return js.ValueOf(e) }))
@@ -435,7 +639,7 @@ func (x CronOptions) ToJS() js.Value {
 	return o
 }
 
-func CronOptionsFromJS(v js.Value) CronOptions {
+func cronOptionsFromJS(v js.Value) CronOptions {
 	var x CronOptions
 	if isNullish(v) {
 		return x
@@ -449,7 +653,7 @@ type AtomicOperationSetOptions struct {
 	ExpireIn *float64
 }
 
-func (x AtomicOperationSetOptions) ToJS() js.Value {
+func (x AtomicOperationSetOptions) toJS() js.Value {
 	o := jsutil.NewObject()
 	if x.ExpireIn != nil {
 		o.Set("expireIn", js.ValueOf(*x.ExpireIn))
@@ -457,7 +661,7 @@ func (x AtomicOperationSetOptions) ToJS() js.Value {
 	return o
 }
 
-func AtomicOperationSetOptionsFromJS(v js.Value) AtomicOperationSetOptions {
+func atomicOperationSetOptionsFromJS(v js.Value) AtomicOperationSetOptions {
 	var x AtomicOperationSetOptions
 	if isNullish(v) {
 		return x
@@ -472,7 +676,7 @@ type AtomicOperationEnqueueOptions struct {
 	BackoffSchedule   []float64
 }
 
-func (x AtomicOperationEnqueueOptions) ToJS() js.Value {
+func (x AtomicOperationEnqueueOptions) toJS() js.Value {
 	o := jsutil.NewObject()
 	if x.Delay != nil {
 		o.Set("delay", js.ValueOf(*x.Delay))
@@ -486,7 +690,7 @@ func (x AtomicOperationEnqueueOptions) ToJS() js.Value {
 	return o
 }
 
-func AtomicOperationEnqueueOptionsFromJS(v js.Value) AtomicOperationEnqueueOptions {
+func atomicOperationEnqueueOptionsFromJS(v js.Value) AtomicOperationEnqueueOptions {
 	var x AtomicOperationEnqueueOptions
 	if isNullish(v) {
 		return x
@@ -500,11 +704,12 @@ func AtomicOperationEnqueueOptionsFromJS(v js.Value) AtomicOperationEnqueueOptio
 }
 
 type AtomicOperationCommitResult struct {
-	Ok           bool
+	Ok bool
+	// The versionstamp of the value committed to KV.
 	Versionstamp *string
 }
 
-func (x AtomicOperationCommitResult) ToJS() js.Value {
+func (x AtomicOperationCommitResult) toJS() js.Value {
 	o := jsutil.NewObject()
 	o.Set("ok", js.ValueOf(x.Ok))
 	if x.Versionstamp != nil {
@@ -513,7 +718,7 @@ func (x AtomicOperationCommitResult) ToJS() js.Value {
 	return o
 }
 
-func AtomicOperationCommitResultFromJS(v js.Value) AtomicOperationCommitResult {
+func atomicOperationCommitResultFromJS(v js.Value) AtomicOperationCommitResult {
 	var x AtomicOperationCommitResult
 	if isNullish(v) {
 		return x
@@ -527,7 +732,7 @@ type KvGetOptions struct {
 	Consistency *KvConsistencyLevel
 }
 
-func (x KvGetOptions) ToJS() js.Value {
+func (x KvGetOptions) toJS() js.Value {
 	o := jsutil.NewObject()
 	if x.Consistency != nil {
 		o.Set("consistency", js.ValueOf(string(*x.Consistency)))
@@ -535,7 +740,7 @@ func (x KvGetOptions) ToJS() js.Value {
 	return o
 }
 
-func KvGetOptionsFromJS(v js.Value) KvGetOptions {
+func kvGetOptionsFromJS(v js.Value) KvGetOptions {
 	var x KvGetOptions
 	if isNullish(v) {
 		return x
@@ -548,7 +753,7 @@ type KvWatchOptions struct {
 	Raw *bool
 }
 
-func (x KvWatchOptions) ToJS() js.Value {
+func (x KvWatchOptions) toJS() js.Value {
 	o := jsutil.NewObject()
 	if x.Raw != nil {
 		o.Set("raw", js.ValueOf(*x.Raw))
@@ -556,7 +761,7 @@ func (x KvWatchOptions) ToJS() js.Value {
 	return o
 }
 
-func KvWatchOptionsFromJS(v js.Value) KvWatchOptions {
+func kvWatchOptionsFromJS(v js.Value) KvWatchOptions {
 	var x KvWatchOptions
 	if isNullish(v) {
 		return x

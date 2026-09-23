@@ -73,6 +73,32 @@ function safeIdent(s: string): string {
 
 const lastSeg = (n: string) => n.split(".").pop()!;
 
+// fromJSName returns the unexported converter function generated for a type
+// (e.g. KvListEntry -> kvListEntryFromJS), matching the unexported toJS()
+// methods so generated internals stay out of the public API surface.
+function fromJSName(name: string): string {
+  return name[0].toLowerCase() + name.slice(1) + "FromJS";
+}
+
+// ---------------- doc comments ----------------
+
+const DOC_BASE = "https://docs.deno.com/api/deno/~/";
+
+// emitDoc writes jsDoc text as `//` comment lines (indent for fields).
+function emitDoc(doc: string | undefined, out: string[], indent = "") {
+  if (typeof doc !== "string" || doc.trim() === "") return;
+  for (const line of doc.trimEnd().split("\n")) {
+    const t = line.trimEnd();
+    out.push(indent + (t === "" ? "//" : "// " + t));
+  }
+}
+
+// emitDocLink appends a Deno API reference link, in the same style as the
+// cloudflare bindings' workers-types links.
+function emitDocLink(symbol: string, out: string[], indent = "") {
+  out.push(`${indent}//   - ${DOC_BASE}${symbol}`);
+}
+
 // ---------------- type conversion model ----------------
 
 interface Conv {
@@ -121,6 +147,14 @@ const jsValueConv: Conv = {
   fromJS: (v) => v,
   toJS: (x) => x,
   nilable: true,
+};
+const bigIntConv: Conv = {
+  go: "uint64",
+  fromJS: (v) => `bigIntToUint64(${v})`,
+  toJS: (x) => `BigInt(${x})`,
+  fromJSFunc: "bigIntToUint64",
+  nilable: false,
+  scalar: true,
 };
 const bytesConv: Conv = {
   go: "[]byte",
@@ -200,9 +234,227 @@ async function loadDocText(): Promise<string> {
 
 const doc: Doc = JSON.parse(await loadDocText());
 const config = JSON.parse(await readFile(configPath, "utf8"));
-const nsNode = doc.nodes.find(
-  (n: Doc) => n.kind === "namespace" && n.name === "Deno",
+
+// ---------------- doc JSON normalization ----------------
+//
+// `deno doc --json` output shape changed across Deno versions. Older
+// versions emit `nodes` as a flat array of `{kind, name, <kind>Def}` nodes
+// with `tsType` subtrees of `{kind, <kind>: payload}`. Newer versions emit
+// `nodes` as a map of module URL -> `{symbols}` where each symbol has
+// `declarations: [{kind, def, jsDoc}]` and tsType subtrees of
+// `{kind, repr, value}`. norm* functions below convert the new schema into
+// the old one, which the rest of the generator operates on.
+
+function normTsType(t: Doc): Doc {
+  if (!t || typeof t !== "object") return t;
+  if (t.value === undefined && t.typeRef !== undefined) return t; // already normalized
+  const v = t.value;
+  const r = t.repr;
+  switch (t.kind) {
+    case "keyword":
+      return { kind: "keyword", keyword: v, repr: r };
+    case "literal":
+      return { kind: "literal", literal: v, repr: r };
+    case "typeRef":
+      return {
+        kind: "typeRef",
+        repr: r,
+        typeRef: {
+          typeName: v?.typeName,
+          typeParams: v?.typeParams?.map(normTsType),
+        },
+      };
+    case "union":
+      return { kind: "union", union: v?.map(normTsType), repr: r };
+    case "intersection":
+      return { kind: "intersection", intersection: v?.map(normTsType), repr: r };
+    case "array":
+      return { kind: "array", array: normTsType(v), repr: r };
+    case "tuple":
+      return { kind: "tuple", tuple: v?.map(normTsType), repr: r };
+    case "rest":
+      return { kind: "rest", rest: normTsType(v), repr: r };
+    case "parenthesized":
+      return { kind: "parenthesized", parenthesized: normTsType(v), repr: r };
+    case "optional":
+      return { kind: "optional", optional: normTsType(v), repr: r };
+    case "typeOperator":
+      return {
+        kind: "typeOperator",
+        repr: r,
+        typeOperator: { operator: v?.operator, tsType: normTsType(v?.tsType) },
+      };
+    case "mapped":
+      return {
+        kind: "mapped",
+        repr: r,
+        mappedType: {
+          tsType: normTsType(v?.tsType),
+          typeParam: {
+            name: v?.typeParam?.name,
+            constraint: normTsType(v?.typeParam?.constraint),
+          },
+        },
+      };
+    case "typeLiteral":
+      return { kind: "typeLiteral", repr: r, typeLiteral: normMembers(v) };
+    case "this":
+      return { kind: "this", repr: r };
+    default:
+      // conditional, indexedAccess, infer, typeQuery, template, importType,
+      // fnOrConstructor, ... -> mapped to any/js.Value by mapType anyway.
+      return t;
+  }
+}
+
+function normParam(p: Doc): Doc {
+  if (p.kind === "rest") {
+    return {
+      kind: "rest",
+      arg: p.arg ? { name: p.arg.name } : undefined,
+      tsType: normTsType(p.tsType),
+    };
+  }
+  return {
+    kind: p.kind,
+    name: p.name,
+    optional: p.optional,
+    tsType: normTsType(p.tsType),
+    left: p.left ? normParam(p.left) : undefined,
+  };
+}
+
+function normFnDef(fd: Doc): Doc {
+  if (!fd) return fd;
+  return {
+    params: (fd.params ?? []).map(normParam),
+    returnType: normTsType(fd.returnType),
+    typeParams: fd.typeParams,
+  };
+}
+
+function normMembers(def: Doc): Doc {
+  if (!def) return def;
+  return {
+    constructors: (def.constructors ?? []).map((c: Doc) => ({
+      params: (c.params ?? []).map(normParam),
+      jsDoc: c.jsDoc,
+    })),
+    properties: (def.properties ?? []).map((p: Doc) => ({
+      ...p,
+      tsType: normTsType(p.tsType),
+    })),
+    methods: (def.methods ?? []).map((m: Doc) => ({
+      ...m,
+      functionDef: m.functionDef ? normFnDef(m.functionDef) : undefined,
+      params: m.params?.map(normParam),
+      returnType: m.returnType ? normTsType(m.returnType) : undefined,
+    })),
+    indexSignatures: (def.indexSignatures ?? []).map((s: Doc) => ({
+      ...s,
+      params: (s.params ?? []).map(normParam),
+      tsType: normTsType(s.tsType),
+    })),
+    callSignatures: (def.callSignatures ?? []).map((s: Doc) => ({
+      ...s,
+      params: (s.params ?? []).map(normParam),
+      tsType: normTsType(s.tsType),
+      returnType: normTsType(s.returnType),
+    })),
+    typeParams: def.typeParams,
+    extends: def.extends,
+  };
+}
+
+function normElement(el: Doc): Doc | null {
+  // Old-schema nodes already carry <kind>Def; pass them through.
+  if (
+    el.namespaceDef || el.classDef || el.interfaceDef || el.typeAliasDef ||
+    el.enumDef || el.variableDef || el.functionDef
+  ) {
+    return el;
+  }
+  const decls: Doc[] = el.declarations ?? [el];
+  const kindRank: Record<string, number> = {
+    class: 5,
+    interface: 4,
+    typeAlias: 3,
+    enum: 3,
+    variable: 2,
+    function: 1,
+    namespace: 0,
+  };
+  let best: Doc | null = null;
+  for (const d of decls) {
+    if (!(d.kind in kindRank)) continue;
+    if (!best) {
+      best = d;
+      continue;
+    }
+    if (d.kind === "function" && best.kind === "function") {
+      if ((d.def?.params?.length ?? 0) > (best.def?.params?.length ?? 0)) {
+        best = d;
+      }
+    } else if (kindRank[d.kind] > kindRank[best.kind]) {
+      best = d;
+    }
+  }
+  if (!best) return null;
+  const def = best.def;
+  const out: Doc = {
+    kind: best.kind,
+    name: el.name,
+    jsDoc: best.jsDoc ?? el.jsDoc,
+  };
+  switch (best.kind) {
+    case "namespace":
+      out.namespaceDef = {
+        elements: (def?.elements ?? []).map(normElement).filter(Boolean),
+      };
+      break;
+    case "class":
+      out.classDef = normMembers(def);
+      break;
+    case "interface":
+      out.interfaceDef = normMembers(def);
+      break;
+    case "typeAlias":
+      out.typeAliasDef = {
+        tsType: normTsType(def?.tsType),
+        typeParams: def?.typeParams,
+      };
+      break;
+    case "enum":
+      out.enumDef = {
+        members: (def?.members ?? []).map((m: Doc) => ({
+          ...m,
+          init: normTsType(m.init),
+        })),
+      };
+      break;
+    case "variable":
+      out.variableDef = { tsType: normTsType(def?.tsType), kind: def?.kind };
+      break;
+    case "function":
+      out.functionDef = normFnDef(def);
+      break;
+    default:
+      return null;
+  }
+  return out;
+}
+
+// `nodes` is either a flat array (old schema) or a map of
+// module URL -> { symbols } (new schema). Flatten to a symbol list.
+const docNodes: Doc[] = Array.isArray(doc.nodes)
+  ? doc.nodes
+  : Object.values(doc.nodes).flatMap((m: Doc) => m.symbols ?? m);
+const denoSym = docNodes.find(
+  (n: Doc) => n.name === "Deno" &&
+    (n.kind === "namespace" ||
+      n.declarations?.some((d: Doc) => d.kind === "namespace")),
 );
+const nsNode = denoSym ? normElement(denoSym) : null;
 if (!nsNode) throw new Error("Deno namespace not found in doc JSON");
 
 // elements map: name -> node. Overloads (functions with the same name) keep
@@ -302,7 +554,11 @@ function propMembers(t: Doc, seen: Set<string>): Map<string, Doc>[] | null {
       for (const p of tl.properties ?? []) {
         if (typeof p.name !== "string" || p.computed === true ||
           p.name.startsWith("[")) continue;
-        m.set(p.name, { tsType: p.tsType, optional: p.optional });
+        m.set(p.name, {
+          tsType: p.tsType,
+          optional: p.optional,
+          jsDoc: p.jsDoc,
+        });
       }
       return [m];
     }
@@ -359,7 +615,11 @@ function interfaceProps(el: Doc): Map<string, Doc>[] {
   for (const p of el.interfaceDef.properties ?? []) {
     if (typeof p.name !== "string" || p.computed === true ||
       p.name.startsWith("[")) continue;
-    m.set(p.name, { tsType: p.tsType, optional: p.optional });
+    m.set(p.name, {
+      tsType: p.tsType,
+      optional: p.optional,
+      jsDoc: p.jsDoc,
+    });
   }
   return [m];
 }
@@ -412,11 +672,14 @@ interface Field {
   jsonName: string;
   conv: Conv;
   optional: boolean;
+  doc?: string;
 }
 
 interface StructDecl {
   name: string;
   fields: Field[];
+  doc?: string;
+  inline?: boolean; // generated for an anonymous TS object shape
 }
 
 const structDecls: StructDecl[] = [];
@@ -431,9 +694,9 @@ interface Ctx {
 function structConv(name: string, inline = false): Conv {
   return {
     go: name,
-    fromJS: (v) => `${name}FromJS(${v})`,
-    toJS: (x) => `${x}.ToJS()`,
-    fromJSFunc: `${name}FromJS`,
+    fromJS: (v) => `${fromJSName(name)}(${v})`,
+    toJS: (x) => `${x}.toJS()`,
+    fromJSFunc: fromJSName(name),
     nilable: false,
     inline,
   };
@@ -450,6 +713,7 @@ function registerStruct(
   members: Map<string, Doc>[],
   ctx: Ctx,
   selfName = false,
+  doc?: string,
 ): string {
   const keyParts: string[] = [];
   for (const m of members) {
@@ -493,10 +757,11 @@ function registerStruct(
       jsonName: n,
       conv,
       optional: !required,
+      doc: chosen.jsDoc?.doc,
     });
   }
   structKeys.set(key, name);
-  structDecls.push({ name, fields });
+  structDecls.push({ name, fields, doc, inline: !selfName });
   return name;
 }
 
@@ -514,6 +779,7 @@ function mapType(t: Doc, ctx: Ctx, inlineName: string): Conv {
         case "boolean":
           return boolConv;
         case "bigint":
+          return bigIntConv;
         case "symbol":
           return jsValueConv;
         default:
@@ -584,8 +850,8 @@ function mapType(t: Doc, ctx: Ctx, inlineName: string): Conv {
     case "this":
       return {
         go: `*${ctx.owner}`,
-        fromJS: (v) => `${ctx.owner}FromJS(${v})`,
-        toJS: (x) => `${x}.ToJS()`,
+        fromJS: (v) => `${fromJSName(ctx.owner)}(${v})`,
+        toJS: (x) => `${x}.toJS()`,
         nilable: true,
       };
     case "typeOperator":
@@ -649,9 +915,9 @@ function mapTypeRef(t: Doc, ctx: Ctx, inlineName: string): Conv {
     case "wrapper":
       return {
         go: `*${name}`,
-        fromJS: (v) => `${name}FromJS(${v})`,
-        toJS: (x) => `${x}.ToJS()`,
-        fromJSFunc: `${name}FromJS`,
+        fromJS: (v) => `${fromJSName(name)}(${v})`,
+        toJS: (x) => `${x}.toJS()`,
+        fromJSFunc: fromJSName(name),
         nilable: true,
       };
     case "struct":
@@ -712,14 +978,18 @@ function mapUnion(t: Doc, ctx: Ctx, inlineName: string): Conv {
 // ---------------- emit helpers ----------------
 
 function emitStruct(d: StructDecl, out: string[]) {
+  emitDoc(d.doc, out);
+  // Anonymous shapes have no corresponding Deno API symbol to link to.
+  if (!d.inline) emitDocLink(`Deno.${d.name}`, out);
   out.push(`type ${d.name} struct {`);
   for (const f of d.fields) {
+    emitDoc(f.doc, out, "\t");
     let go = f.conv.go;
     if (f.optional && !f.conv.nilable) go = "*" + go;
     out.push(`\t${f.goName} ${go}`);
   }
   out.push(`}`, ``);
-  out.push(`func (x ${d.name}) ToJS() js.Value {`);
+  out.push(`func (x ${d.name}) toJS() js.Value {`);
   out.push(`\to := jsutil.NewObject()`);
   for (const f of d.fields) {
     const ref = `x.${f.goName}`;
@@ -759,7 +1029,7 @@ function emitStruct(d: StructDecl, out: string[]) {
     }
   }
   out.push(`\treturn o`, `}`, ``);
-  out.push(`func ${d.name}FromJS(v js.Value) ${d.name} {`);
+  out.push(`func ${fromJSName(d.name)}(v js.Value) ${d.name} {`);
   out.push(`\tvar x ${d.name}`, `\tif isNullish(v) {`, `\t\treturn x`, `\t}`);
   for (const f of d.fields) {
     const get = `v.Get("${f.jsonName}")`;
@@ -921,9 +1191,11 @@ interface FuncEmit {
   fd: Doc;
   owner: string;
   prefix: string; // PascalCase prefix for inline struct names
-  target: string; // e.g. `x.v` or `deno` or `deno.Get("KvU64")`
+  target: string; // e.g. `x.instance` or `deno` or `deno.Get("KvU64")`
   callKind: "call" | "new" | "get";
   typeParams?: Set<string>; // type params in scope (e.g. from the class)
+  doc?: string; // jsDoc text for the emitted comment
+  docSymbol?: string; // Deno API symbol for the doc link (e.g. "Deno.Kv")
 }
 
 function emitFunc(fe: FuncEmit, out: string[]) {
@@ -973,6 +1245,8 @@ function emitFunc(fe: FuncEmit, out: string[]) {
   }
 
   const recv = fe.recv ? `(${fe.recv}) ` : "";
+  emitDoc(fe.doc, out);
+  if (fe.docSymbol) emitDocLink(fe.docSymbol, out);
   out.push(
     `func ${recv}${fe.goName}(${params.map(paramDecl).join(", ")})${
       sig ? " " + sig : ""
@@ -993,19 +1267,19 @@ function emitFunc(fe: FuncEmit, out: string[]) {
   }
 
   if (isNew) {
-    out.push(`\treturn ${fe.owner}FromJS(${call})`);
+    out.push(`\treturn ${fromJSName(fe.owner)}(${call})`);
   } else if (
     awaited !== null || (rt && rt.kind === "typeRef" &&
       lastSeg(rt.typeRef.typeName) === "Promise")
   ) {
     if (awaitConv) {
-      out.push(`\tv, err := awaitResult(${call})`);
+      out.push(`\tv, err := jsutil.AwaitPromise(${call})`);
       out.push(`\tif err != nil {`);
       out.push(`\t\treturn ${zeroOf(awaitConv.go)}, err`);
       out.push(`\t}`);
       out.push(`\treturn ${awaitConv.fromJS("v")}, nil`);
     } else {
-      out.push(`\t_, err := awaitResult(${call})`);
+      out.push(`\t_, err := jsutil.AwaitPromise(${call})`);
       out.push(`\treturn err`);
     }
   } else if (isThis) {
@@ -1043,22 +1317,24 @@ function emitWrapper(el: Doc) {
   const name = el.name;
   const def = el.classDef ?? el.interfaceDef;
   const ctx: Ctx = { owner: name, typeParams: typeParamsOf(el) };
-  classOut.push(`type ${name} struct {`, `\tv js.Value`, `}`, ``);
+  emitDoc(el.jsDoc?.doc, classOut);
+  emitDocLink(`Deno.${name}`, classOut);
+  classOut.push(`type ${name} struct {`, `\tinstance js.Value`, `}`, ``);
   classOut.push(
-    `func ${name}FromJS(v js.Value) *${name} {`,
+    `func ${fromJSName(name)}(v js.Value) *${name} {`,
     `\tif isNullish(v) {`,
     `\t\treturn nil`,
     `\t}`,
-    `\treturn &${name}{v: v}`,
+    `\treturn &${name}{instance: v}`,
     `}`,
     ``,
   );
   classOut.push(
-    `func (x *${name}) ToJS() js.Value {`,
+    `func (x *${name}) toJS() js.Value {`,
     `\tif x == nil {`,
     `\t\treturn js.Undefined()`,
     `\t}`,
-    `\treturn x.v`,
+    `\treturn x.instance`,
     `}`,
     ``,
   );
@@ -1077,6 +1353,8 @@ function emitWrapper(el: Doc) {
       target: `deno.Get("${name}")`,
       callKind: "new",
       typeParams: ctx.typeParams,
+      doc: ctors[0].jsDoc?.doc,
+      docSymbol: `Deno.${name}`,
     }, classOut);
   }
 
@@ -1088,16 +1366,18 @@ function emitWrapper(el: Doc) {
     }
     const conv = mapType(p.tsType, ctx, name + pascal(p.name));
     const goName = pascal(p.name);
+    emitDoc(p.jsDoc?.doc, classOut);
+    emitDocLink(`Deno.${name}`, classOut);
     classOut.push(
       `func (x *${name}) ${goName}() ${conv.go} {`,
-      `\treturn ${conv.fromJS(`x.v.Get("${p.name}")`)}`,
+      `\treturn ${conv.fromJS(`x.instance.Get("${p.name}")`)}`,
       `}`,
       ``,
     );
     if (!p.readonly) {
       classOut.push(
         `func (x *${name}) Set${goName}(v ${conv.go}) {`,
-        `\tx.v.Set("${p.name}", ${conv.toJS("v")})`,
+        `\tx.instance.Set("${p.name}", ${conv.toJS("v")})`,
         `}`,
         ``,
       );
@@ -1130,9 +1410,11 @@ function emitWrapper(el: Doc) {
         ctx,
         name + pascal(m.name),
       );
+      emitDoc(m.jsDoc?.doc, classOut);
+      emitDocLink(`Deno.${name}`, classOut);
       classOut.push(
         `func (x *${name}) ${pascal(m.name)}() ${conv.go} {`,
-        `\treturn ${conv.fromJS(`x.v.Get("${m.name}")`)}`,
+        `\treturn ${conv.fromJS(`x.instance.Get("${m.name}")`)}`,
         `}`,
         ``,
       );
@@ -1145,9 +1427,11 @@ function emitWrapper(el: Doc) {
         ctx,
         name + pascal(m.name),
       );
+      emitDoc(m.jsDoc?.doc, classOut);
+      emitDocLink(`Deno.${name}`, classOut);
       classOut.push(
         `func (x *${name}) Set${pascal(m.name)}(v ${conv.go}) {`,
-        `\tx.v.Set("${m.name}", ${conv.toJS("v")})`,
+        `\tx.instance.Set("${m.name}", ${conv.toJS("v")})`,
         `}`,
         ``,
       );
@@ -1167,6 +1451,8 @@ function emitWrapper(el: Doc) {
         target: `deno.Get("${name}")`,
         callKind: "call",
         typeParams: ctx.typeParams,
+        doc: m.jsDoc?.doc,
+        docSymbol: `Deno.${name}`,
       }, classOut);
     } else {
       emitFunc({
@@ -1176,9 +1462,11 @@ function emitWrapper(el: Doc) {
         fd,
         owner: name,
         prefix: name + pascal(m.name),
-        target: "x.v",
+        target: "x.instance",
         callKind: "call",
         typeParams: ctx.typeParams,
+        doc: m.jsDoc?.doc,
+        docSymbol: `Deno.${name}`,
       }, classOut);
     }
   }
@@ -1187,18 +1475,24 @@ function emitWrapper(el: Doc) {
 function emitStructElement(el: Doc) {
   const ctx: Ctx = { owner: el.name, typeParams: typeParamsOf(el) };
   const members = interfaceProps(el);
-  structAliasIfDeduped(el.name, registerStruct(el.name, members, ctx, true));
+  structAliasIfDeduped(
+    el.name,
+    registerStruct(el.name, members, ctx, true, el.jsDoc?.doc),
+    el,
+  );
 }
 
-// structAliasIfDeduped emits `type A = B` plus a FromJS forwarder when a
+// structAliasIfDeduped emits `type A = B` plus a fromJS forwarder when a
 // named element was deduplicated onto an already-registered identical struct.
-function structAliasIfDeduped(name: string, got: string) {
+function structAliasIfDeduped(name: string, got: string, el?: Doc) {
   if (got === name) return;
+  emitDoc(el?.jsDoc?.doc, typeOut);
+  emitDocLink(`Deno.${name}`, typeOut);
   typeOut.push(
     `type ${name} = ${got}`,
     ``,
-    `func ${name}FromJS(v js.Value) ${name} {`,
-    `\treturn ${got}FromJS(v)`,
+    `func ${fromJSName(name)}(v js.Value) ${name} {`,
+    `\treturn ${fromJSName(got)}(v)`,
     `}`,
     ``,
   );
@@ -1206,6 +1500,8 @@ function structAliasIfDeduped(name: string, got: string) {
 
 function emitStralias(el: Doc) {
   const name = el.name;
+  emitDoc(el.jsDoc?.doc, typeOut);
+  emitDocLink(`Deno.${name}`, typeOut);
   typeOut.push(`type ${name} = string`, ``);
   const t = el.typeAliasDef.tsType;
   const lits: string[] = t.kind === "union"
@@ -1222,11 +1518,15 @@ function emitAlias(el: Doc) {
   const name = el.name;
   const ctx: Ctx = { owner: name, typeParams: typeParamsOf(el) };
   const c = mapType(el.typeAliasDef.tsType, ctx, name);
+  emitDoc(el.jsDoc?.doc, typeOut);
+  emitDocLink(`Deno.${name}`, typeOut);
   typeOut.push(`type ${name} = ${c.go}`, ``);
 }
 
 function emitEnum(el: Doc) {
   const name = el.name;
+  emitDoc(el.jsDoc?.doc, typeOut);
+  emitDocLink(`Deno.${name}`, typeOut);
   typeOut.push(`type ${name} int`, ``);
   typeOut.push(`const (`);
   let next = 0;
@@ -1242,6 +1542,8 @@ function emitVariable(el: Doc) {
   const name = el.name;
   const ctx: Ctx = { owner: pascal(name), typeParams: new Set() };
   const conv = mapType(el.variableDef.tsType, ctx, pascal(name));
+  emitDoc(el.jsDoc?.doc, varOut);
+  emitDocLink(`Deno.${name}`, varOut);
   varOut.push(
     `func Get${pascal(name)}() ${conv.go} {`,
     `\treturn ${conv.fromJS(`deno.Get("${name}")`)}`,
@@ -1259,6 +1561,8 @@ function emitNamespaceFunc(el: Doc) {
     prefix: pascal(el.name),
     target: "deno",
     callKind: "call",
+    doc: el.jsDoc?.doc,
+    docSymbol: `Deno.${el.name}`,
   }, funcOut);
 }
 
@@ -1279,8 +1583,9 @@ for (const e of nsNode.namespaceDef.elements) {
         typeParams: typeParamsOf(e),
       },
       true,
+      e.jsDoc?.doc,
     );
-    structAliasIfDeduped(e.name, got);
+    structAliasIfDeduped(e.name, got, e);
   }
 }
 
@@ -1323,9 +1628,11 @@ function fileText(lines: string[]): string {
   const body = lines.join("\n");
   let imports = "";
   const imps: string[] = [];
-  if (/\bjs\./.test(body)) imps.push(`"syscall/js"`);
-  if (/\btime\./.test(body)) imps.push(`"time"`);
-  if (/\bjsutil\./.test(body)) {
+  // Require an identifier after the package name so that doc comments
+  // (e.g. a sentence ending in "time.") don't trigger a false import.
+  if (/\bjs\.\w/.test(body)) imps.push(`"syscall/js"`);
+  if (/\btime\.\w/.test(body)) imps.push(`"time"`);
+  if (/\bjsutil\.\w/.test(body)) {
     imps.push(`"github.com/syumai/workers-go/internal/jsutil"`);
   }
   if (imps.length) {

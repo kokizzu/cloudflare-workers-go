@@ -9,9 +9,8 @@
 
 ## Requirements
 
-- Deno
+- Deno 2.4.2 or later (required for `deno deploy`)
 - Go 1.24.0 or later
-- `deployctl` (only for deployment to Deno Deploy)
 
 ## Getting Started
 
@@ -33,8 +32,21 @@ curl http://localhost:8000/hello # outputs "Hello!"
 ```
 deno task dev     # run dev server
 deno task build   # build Go Wasm binary
-deno task deploy  # deploy to Deno Deploy (requires deployctl)
+deno task deploy  # deploy to Deno Deploy (runs `deno deploy`)
 ```
+
+### Deploying to Deno Deploy
+
+- Replace `"org": "<TBD>"` in `deno.json` with your Deno Deploy organization slug (or leave it as-is and let `deno deploy` prompt you).
+- Then run:
+
+```console
+deno task build
+deno task deploy
+```
+
+- On the first run, `deno deploy` interactively lets you select or create an app and saves `deploy.app` back into `deno.json`.
+- Use `deno deploy --prod` to deploy to production.
 
 ### Testing dev server
 

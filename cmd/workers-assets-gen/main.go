@@ -98,19 +98,19 @@ func copyRuntimeAssets(runtime Runtime, buildDirPath string) error {
 	return nil
 }
 
-// copyEntryAsset copies the runtime's entry point file to "main.ts" in the
+// copyEntryAsset copies the runtime's entry point file to "main.mjs" in the
 // build directory when the runtime provides one (e.g. Deno, whose entry point
 // calls Deno.serve). Runtimes that use worker.mjs as their entry point
 // (Cloudflare, browser) have no entry asset and are skipped.
 func copyEntryAsset(runtime Runtime, buildDirPath string) error {
-	originPath := path.Join(entryDirPath, string(runtime)+".ts")
+	originPath := path.Join(entryDirPath, string(runtime)+".mjs")
 	if _, err := assets.ReadFile(originPath); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
 		}
 		return err
 	}
-	destPath := path.Join(buildDirPath, "main.ts")
+	destPath := path.Join(buildDirPath, "main.mjs")
 	if err := copyFile(destPath, originPath); err != nil {
 		return err
 	}

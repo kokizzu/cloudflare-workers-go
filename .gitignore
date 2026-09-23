@@ -3,4 +3,3 @@ build
 node_modules
 .wrangler
 .dev.vars
-scripts/gen-deno/deno-doc.raw.json

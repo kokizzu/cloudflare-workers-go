@@ -5,66 +5,239 @@
 package deno
 
 import (
+	"github.com/syumai/workers-go/internal/jsutil"
 	"syscall/js"
 )
 
+// Returns an object describing the memory usage of the Deno process and the
+// V8 subsystem measured in bytes.
+//   - https://docs.deno.com/api/deno/~/Deno.memoryUsage
 func GetMemoryUsage() MemoryUsage {
-	return MemoryUsageFromJS(deno.Call("memoryUsage"))
+	return memoryUsageFromJS(deno.Call("memoryUsage"))
 }
 
+// Get the `hostname` of the machine the Deno process is running on.
+//
+// ```ts
+// console.log(Deno.hostname());
+// ```
+//
+// Requires `allow-sys` permission.
+//   - https://docs.deno.com/api/deno/~/Deno.hostname
 func Hostname() string {
 	return getString(deno.Call("hostname"))
 }
 
+// Returns an array containing the 1, 5, and 15 minute load averages. The
+// load average is a measure of CPU and IO utilization of the last one, five,
+// and 15 minute periods expressed as a fractional number.  Zero means there
+// is no load. On Windows, the three values are always the same and represent
+// the current load, not the 1, 5 and 15 minute load averages.
+//
+// ```ts
+// console.log(Deno.loadavg());  // e.g. [ 0.71, 0.44, 0.44 ]
+// ```
+//
+// Requires `allow-sys` permission.
+//
+// On Windows there is no API available to retrieve this information and this method returns `[ 0, 0, 0 ]`.
+//   - https://docs.deno.com/api/deno/~/Deno.loadavg
 func Loadavg() []float64 {
 	return sliceFromJS(deno.Call("loadavg"), getFloat)
 }
 
+// Returns an array of the network interface information.
+//
+// ```ts
+// console.log(Deno.networkInterfaces());
+// ```
+//
+// Requires `allow-sys` permission.
+//   - https://docs.deno.com/api/deno/~/Deno.networkInterfaces
 func NetworkInterfaces() []NetworkInterfaceInfo {
-	return sliceFromJS(deno.Call("networkInterfaces"), NetworkInterfaceInfoFromJS)
+	return sliceFromJS(deno.Call("networkInterfaces"), networkInterfaceInfoFromJS)
 }
 
+// Displays the total amount of free and used physical and swap memory in the
+// system, as well as the buffers and caches used by the kernel.
+//
+// # This is similar to the `free` command in Linux
+//
+// ```ts
+// console.log(Deno.systemMemoryInfo());
+// ```
+//
+// Requires `allow-sys` permission.
+//   - https://docs.deno.com/api/deno/~/Deno.systemMemoryInfo
 func GetSystemMemoryInfo() SystemMemoryInfo {
-	return SystemMemoryInfoFromJS(deno.Call("systemMemoryInfo"))
+	return systemMemoryInfoFromJS(deno.Call("systemMemoryInfo"))
 }
 
+// Returns the release version of the Operating System.
+//
+// ```ts
+// console.log(Deno.osRelease());
+// ```
+//
+// Requires `allow-sys` permission.
+// Under consideration to possibly move to Deno.build or Deno.versions and if
+// it should depend sys-info, which may not be desirable.
+//   - https://docs.deno.com/api/deno/~/Deno.osRelease
 func OsRelease() string {
 	return getString(deno.Call("osRelease"))
 }
 
+// Returns the Operating System uptime in number of seconds.
+//
+// ```ts
+// console.log(Deno.osUptime());
+// ```
+//
+// Requires `allow-sys` permission.
+//   - https://docs.deno.com/api/deno/~/Deno.osUptime
 func OsUptime() float64 {
 	return getFloat(deno.Call("osUptime"))
 }
 
+// Returns the path to the current deno executable.
+//
+// ```ts
+// console.log(Deno.execPath());  // e.g. "/home/alice/.local/bin/deno"
+// ```
+//   - https://docs.deno.com/api/deno/~/Deno.execPath
 func ExecPath() string {
 	return getString(deno.Call("execPath"))
 }
 
+// Return a string representing the current working directory.
+//
+// If the current directory can be reached via multiple paths (due to symbolic
+// links), `cwd()` may return any one of them.
+//
+// ```ts
+// const currentWorkingDirectory = Deno.cwd();
+// ```
+//
+// Throws {@linkcode Deno.errors.NotFound} if directory not available.
+//   - https://docs.deno.com/api/deno/~/Deno.cwd
 func Cwd() string {
 	return getString(deno.Call("cwd"))
 }
 
+// Returns the user id of the process on POSIX platforms. Returns null on Windows.
+//
+// ```ts
+// console.log(Deno.uid());
+// ```
+//
+// Requires `allow-sys` permission.
+//   - https://docs.deno.com/api/deno/~/Deno.uid
 func Uid() *float64 {
 	return ptrFromJS(deno.Call("uid"), getFloat)
 }
 
+// Returns the group id of the process on POSIX platforms. Returns null on windows.
+//
+// ```ts
+// console.log(Deno.gid());
+// ```
+//
+// Requires `allow-sys` permission.
+//   - https://docs.deno.com/api/deno/~/Deno.gid
 func Gid() *float64 {
 	return ptrFromJS(deno.Call("gid"), getFloat)
 }
 
+// **UNSTABLE**: New API, yet to be vetted.
+//
+// Open a new {@linkcode Deno.Kv} connection to persist data.
+//
+// This is an unstable API and requires the `--unstable-kv` flag to be passed
+// when running Deno.
+//
+// The `path` argument accepts several forms:
+//
+//   - A path to a local SQLite database **file** (not a directory). The file,
+//     and any missing parent directories, are created if they don't exist. For
+//     example `Deno.openKv("./my_database.sqlite")`. Read and write access to
+//     the file is required.
+//   - The special value `":memory:"` to open an in-memory database that is
+//     discarded when the process exits.
+//   - An `http://` or `https://` URL pointing at a remote KV database, such as
+//     one hosted on Deno Deploy.
+//
+// When no path is provided, the database will be opened in a default path for
+// the current script. This location is persistent across script runs and is
+// keyed on the origin storage key (the same key that is used to determine
+// `localStorage` persistence). More information about the origin storage key
+// can be found in the Deno Manual.
+//
+// ```ts
+// // Open (or create) a database backed by a local file.
+// const kv = await Deno.openKv("./my_database.sqlite");
+//
+// await kv.set(["users", "alice"], { name: "Alice" });
+// const entry = await kv.get(["users", "alice"]);
+// console.log(entry.value); // { name: "Alice" }
+//
+// kv.close();
+// ```
+//   - https://docs.deno.com/api/deno/~/Deno.openKv
 func OpenKv(path ...string) (*Kv, error) {
 	args := []any{}
 	if len(path) > 0 {
 		args = append(args, js.ValueOf(path[0]))
 	}
-	v, err := awaitResult(deno.Call("openKv", args...))
+	v, err := jsutil.AwaitPromise(deno.Call("openKv", args...))
 	if err != nil {
 		return nil, err
 	}
-	return KvFromJS(v), nil
+	return kvFromJS(v), nil
 }
 
+// **UNSTABLE**: New API, yet to be vetted.
+//
+// Create a cron job that will periodically execute the provided handler
+// callback based on the specified schedule.
+//
+// ```ts
+//
+//	Deno.cron("sample cron", "20 * * * *", {
+//	  backoffSchedule: [10, 20]
+//	}, () => {
+//
+//	  console.log("cron job executed");
+//	});
+//
+// ```
+//
+// `schedule` can be a string in the Unix cron format or in JSON format
+// as specified by interface {@linkcode CronSchedule}, where time is specified
+// using UTC time zone.
+//
+// `backoffSchedule` option can be used to specify the retry policy for failed
+// executions. Each element in the array represents the number of milliseconds
+// to wait before retrying the execution. For example, `[1000, 5000, 10000]`
+// means that a failed execution will be retried at most 3 times, with 1
+// second, 5 seconds, and 10 seconds delay between each retry. There is a
+// limit of 5 retries and a maximum interval of 1 hour (3600000 milliseconds).
+//
+// `signal` option can be used to stop the cron job by passing an
+// {@linkcode AbortSignal} and aborting it. This is useful for implementing a
+// graceful shutdown, since aborting the signal unregisters the job:
+//
+// ```ts
+// const ac = new AbortController();
+//
+//	Deno.cron("sample cron", "20 * * * *", { signal: ac.signal }, () => {
+//	  console.log("cron job executed");
+//	});
+//
+// // Later, stop the cron job from running again.
+// ac.abort();
+// ```
+//   - https://docs.deno.com/api/deno/~/Deno.cron
 func Cron(name string, schedule any, options *CronOptions, handler js.Value) error {
-	_, err := awaitResult(deno.Call("cron", js.ValueOf(name), anyToJS(schedule), ptrToJS(options, func(e CronOptions) js.Value { return e.ToJS() }), handler))
+	_, err := jsutil.AwaitPromise(deno.Call("cron", js.ValueOf(name), anyToJS(schedule), ptrToJS(options, func(e CronOptions) js.Value { return e.toJS() }), handler))
 	return err
 }

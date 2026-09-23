@@ -8,7 +8,7 @@
   },
   "scripts": {
     "gen": "node src/index.ts",
-    "snapshot": "deno types > deno.d.ts && deno doc --json deno.d.ts > deno-doc.raw.json && node src/snapshot.ts deno-doc.raw.json deno-doc.json && rm deno-doc.raw.json",
+    "snapshot": "node src/snapshot.ts",
     "typecheck": "tsc --noEmit"
   },
   "packageManager": "pnpm@11.0.4",

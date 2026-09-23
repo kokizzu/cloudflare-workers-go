@@ -1,4 +1,4 @@
-// Copyright 2018-2025 the Deno authors. MIT license.
+// Copyright 2018-2026 the Deno authors. MIT license.
 
 /// <reference no-default-lib="true" />
 /// <reference lib="esnext" />
@@ -774,6 +774,76 @@ declare namespace Deno {
      * ```
      */
     step(fn: (t: TestContext) => void | Promise<void>): Promise<boolean>;
+
+    /** Assert that `actual` matches a snapshot stored in a snapshot file.
+     *
+     * The snapshot is stored in `__snapshots__/<test file name>.snap` next
+     * to the test file, under a key derived from the test (and step) name.
+     * On the first run, create the snapshot file by running the tests with
+     * the `--update-snapshots` flag; commit it alongside the test. On
+     * subsequent runs the assertion fails if the serialized value no longer
+     * matches the stored snapshot. To intentionally change snapshots, run
+     * the tests with `--update-snapshots` again.
+     *
+     * No read or write permissions are needed for snapshot files in the
+     * default location; a custom `dir` or `path` requires them.
+     *
+     * The snapshot file format is compatible with
+     * `assertSnapshot` from
+     * [`@std/testing/snapshot`](https://jsr.io/@std/testing/doc/snapshot).
+     *
+     * ```ts
+     * Deno.test("matches snapshot", async (t) => {
+     *   await t.assertSnapshot({ hello: "world", example: 123 });
+     * });
+     * ```
+     */
+    assertSnapshot<T>(
+      actual: T,
+      options?: TestSnapshotOptions<T>,
+    ): Promise<void>;
+
+    /** Assert that `actual` matches a snapshot stored in a snapshot file,
+     * using `message` as the failure message if it does not.
+     *
+     * ```ts
+     * Deno.test("matches snapshot", async (t) => {
+     *   await t.assertSnapshot(2 + 3, "should be five");
+     * });
+     * ```
+     */
+    assertSnapshot<T>(actual: T, message?: string): Promise<void>;
+  }
+
+  /** Options which can be set when calling
+   * {@linkcode Deno.TestContext.assertSnapshot}.
+   *
+   * @category Testing */
+  export interface TestSnapshotOptions<T = unknown> {
+    /** Snapshot output directory, relative to the directory of the test
+     * file (or absolute). Snapshot files are written to this directory
+     * instead of the default `__snapshots__` directory. Requires read (and,
+     * with `--update-snapshots`, write) permission for the directory.
+     *
+     * If both `dir` and `path` are specified, `dir` is ignored. */
+    dir?: string;
+    /** Snapshot output path, relative to the directory of the test file (or
+     * absolute). The snapshot is stored in this file instead of the default
+     * `__snapshots__/<test file name>.snap` file. Requires read (and, with
+     * `--update-snapshots`, write) permission for the file.
+     *
+     * If both `dir` and `path` are specified, `dir` is ignored. */
+    path?: string;
+    /** Name of the snapshot to use in the snapshot file instead of the
+     * name derived from the test and step names. */
+    name?: string;
+    /** Failure message to use when the assertion fails, instead of the
+     * generated diff message. */
+    msg?: string;
+    /** Function used to serialize the value to a string before comparing it
+     * with the stored snapshot. Defaults to a `Deno.inspect()`-based
+     * serializer. */
+    serializer?: (actual: T) => string;
   }
 
   /** @category Testing */
@@ -831,13 +901,23 @@ declare namespace Deno {
      * not await. This helps in preventing logic errors and memory leaks
      * in the application code.
      *
-     * @default {true} */
+     * Can also be enabled globally with the `--sanitize-ops` CLI flag,
+     * the `DENO_TEST_SANITIZE_OPS=1` environment variable, or the
+     * `test.sanitizeOps` option in `deno.json`. Can be set per-module
+     * with {@linkcode Deno.test.sanitizer}.
+     *
+     * @default {false} */
     sanitizeOps?: boolean;
     /** Ensure the test step does not "leak" resources - like open files or
      * network connections - by ensuring the open resources at the start of the
      * test match the open resources at the end of the test.
      *
-     * @default {true} */
+     * Can also be enabled globally with the `--sanitize-resources` CLI flag,
+     * the `DENO_TEST_SANITIZE_RESOURCES=1` environment variable, or the
+     * `test.sanitizeResources` option in `deno.json`. Can be set per-module
+     * with {@linkcode Deno.test.sanitizer}.
+     *
+     * @default {false} */
     sanitizeResources?: boolean;
     /** Ensure the test case does not prematurely cause the process to exit,
      * for example via a call to {@linkcode Deno.exit}.
@@ -852,12 +932,42 @@ declare namespace Deno {
      *
      * @default {"inherit"} */
     permissions?: PermissionOptions;
+    /** Maximum duration in milliseconds that the test is allowed to run
+     * before being marked as a failed test. Both asynchronous hangs and
+     * synchronous hot loops are caught.
+     *
+     * If unset or `0`, the test runs without a deadline.
+     */
+    timeout?: number;
+    /** Number of times to re-run the test if it fails. The test is considered
+     * to have passed if any attempt passes. Useful for tolerating flaky tests.
+     *
+     * When set, this takes precedence over the `--retry` flag, including an
+     * explicit `0` which opts the test out of a flag-provided default.
+     *
+     * @default {0} */
+    retry?: number;
+    /** Number of additional times to run the test. Every repetition must pass
+     * for the test to pass. Useful for surfacing flaky tests. When combined
+     * with {@linkcode TestDefinition.retry}, each repetition may itself be
+     * retried.
+     *
+     * When set, this takes precedence over the `--repeats` flag, including an
+     * explicit `0` which opts the test out of a flag-provided default.
+     *
+     * @default {0} */
+    repeats?: number;
   }
 
   /** Register a test which will be run when `deno test` is used on the command
    * line and the containing module looks like a test module.
    *
    * `fn` can be async if required.
+   *
+   * Tests are discovered before they are executed, so registrations must happen
+   * at module load time.
+   * Nested `Deno.test()` calls are not supported.
+   * Use `t.step()` for nested tests.
    *
    * ```ts
    * import { assertEquals } from "jsr:@std/assert";
@@ -1075,97 +1185,250 @@ declare namespace Deno {
       fn: (t: TestContext) => void | Promise<void>,
     ): void;
 
-    /** Shorthand property for ignoring a particular test case.
+    /** Register a parameterized group of tests, one per case in `cases`.
+     *
+     * Returns a function that takes a name template and a test function. For
+     * each case the name template is interpolated and the test function is
+     * called with the case's value(s) followed by the {@linkcode TestContext}.
+     *
+     * Array cases are spread as positional arguments; object (or primitive)
+     * cases are passed as a single argument.
+     *
+     * The name template supports `printf`-style tokens that consume the case's
+     * values in order (`%s`, `%d`/`%i`, `%f`, `%j`, `%o`/`%O`), `%#` for the
+     * zero-based case index, and `%%` for a literal `%`. For object cases,
+     * `$key` (and `$key.nested`) interpolates the corresponding property.
+     *
+     * ```ts
+     * import { assertEquals } from "jsr:@std/assert";
+     *
+     * Deno.test.each([
+     *   [1, 1, 2],
+     *   [1, 2, 3],
+     *   [2, 1, 3],
+     * ])("add(%i, %i) = %i", (a, b, expected) => {
+     *   assertEquals(a + b, expected);
+     * });
+     *
+     * Deno.test.each([
+     *   { a: 1, b: 1, sum: 2 },
+     *   { a: 1, b: 2, sum: 3 },
+     * ])("$a + $b = $sum", ({ a, b, sum }) => {
+     *   assertEquals(a + b, sum);
+     * });
+     * ```
      *
      * @category Testing
      */
-    ignore(t: Omit<TestDefinition, "ignore">): void;
+    each: TestEach;
 
-    /** Shorthand property for ignoring a particular test case.
-     *
-     * @category Testing
-     */
-    ignore(name: string, fn: (t: TestContext) => void | Promise<void>): void;
+    /** Shorthand property for ignoring a particular test case. */
+    ignore: TestIgnore;
 
-    /** Shorthand property for ignoring a particular test case.
-     *
-     * @category Testing
-     */
-    ignore(fn: (t: TestContext) => void | Promise<void>): void;
+    /** Shorthand property for focusing a particular test case. */
+    only: TestOnly;
 
-    /** Shorthand property for ignoring a particular test case.
+    /** Register a function to be called before all tests in the current scope.
+     *
+     * These functions are run in FIFO order (first in, first out).
+     *
+     * If an exception is raised during execution of this hook, the remaining `beforeAll` hooks will not be run.
+     *
+     * ```ts
+     * Deno.test.beforeAll(() => {
+     *   // Setup code that runs once before all tests
+     *   console.log("Setting up test suite");
+     * });
+     * ```
      *
      * @category Testing
      */
-    ignore(
+    beforeAll(
+      fn: () => void | Promise<void>,
+    ): void;
+
+    /** Register a function to be called before each test in the current scope.
+     *
+     * These functions are run in FIFO order (first in, first out).
+     *
+     * If an exception is raised during execution of this hook, the remaining hooks will not be run and the currently running
+     * test case will be marked as failed.
+     *
+     * ```ts
+     * Deno.test.beforeEach(() => {
+     *   // Setup code that runs before each test
+     *   console.log("Setting up test");
+     * });
+     * ```
+     *
+     * @category Testing
+     */
+    beforeEach(fn: () => void | Promise<void>): void;
+
+    /** Register a function to be called after each test in the current scope.
+     *
+     * These functions are run in LIFO order (last in, first out).
+     *
+     * If an exception is raised during execution of this hook, the remaining hooks will not be run and the currently running
+     * test case will be marked as failed.
+     *
+     * ```ts
+     * Deno.test.afterEach(() => {
+     *   // Cleanup code that runs after each test
+     *   console.log("Cleaning up test");
+     * });
+     * ```
+     *
+     * @category Testing
+     */
+    afterEach(fn: () => void | Promise<void>): void;
+
+    /** Register a function to be called after all tests in the current scope have finished running.
+     *
+     * These functions are run in the LIFO order (last in, first out).
+     *
+     * If an exception is raised during execution of this hook, the remaining `afterAll` hooks will not be run.
+     *
+     * ```ts
+     * Deno.test.afterAll(() => {
+     *   // Cleanup code that runs once after all tests
+     *   console.log("Cleaning up test suite");
+     * });
+     * ```
+     *
+     * @category Testing
+     */
+    afterAll(fn: () => void | Promise<void>): void;
+
+    /** Configure sanitizers at the module level. This overrides CLI flags and
+     * config file settings, but can still be overridden per-test via
+     * `sanitizeOps` / `sanitizeResources` in test options.
+     *
+     * Should be called at the top of the module, before any `Deno.test()`
+     * registrations — each call sets the defaults that subsequently registered
+     * tests inherit, so tests registered before the call use the previous
+     * defaults.
+     *
+     * ```ts
+     * // Enable both sanitizers for all tests in this file
+     * Deno.test.sanitizer({ ops: true, resources: true });
+     *
+     * Deno.test("my test", () => {
+     *   // This test will have ops and resources sanitizers enabled
+     * });
+     *
+     * Deno.test({
+     *   name: "override per-test",
+     *   sanitizeOps: false,
+     *   fn() {
+     *     // This test opts out of ops sanitizer
+     *   },
+     * });
+     * ```
+     *
+     * @category Testing
+     */
+    sanitizer(options: {
+      /** Enable or disable the ops sanitizer for all tests in this module. */
+      ops?: boolean;
+      /** Enable or disable the resources sanitizer for all tests in this module. */
+      resources?: boolean;
+    }): void;
+  }
+
+  /** Register a parameterized group of tests. See {@linkcode DenoTest.each}.
+   *
+   * The first overload handles array cases (their values are spread as
+   * positional arguments); the second handles object or primitive cases (each
+   * passed as a single argument followed by the {@linkcode TestContext}).
+   *
+   * The {@linkcode TestContext} is also passed as the final argument to array
+   * case functions at runtime, but is not reflected in their parameter types so
+   * that the case values stay correctly typed.
+   *
+   * @category Testing
+   */
+  export interface TestEach {
+    <const T extends readonly unknown[]>(
+      cases: readonly T[],
+    ): {
+      (
+        name: string,
+        fn: (...args: [...T]) => void | Promise<void>,
+      ): void;
+      (
+        name: string,
+        options: Omit<TestDefinition, "fn" | "name">,
+        fn: (...args: [...T]) => void | Promise<void>,
+      ): void;
+    };
+    <const T>(
+      cases: readonly T[],
+    ): {
+      (
+        name: string,
+        fn: (value: T, t: TestContext) => void | Promise<void>,
+      ): void;
+      (
+        name: string,
+        options: Omit<TestDefinition, "fn" | "name">,
+        fn: (value: T, t: TestContext) => void | Promise<void>,
+      ): void;
+    };
+  }
+
+  /** Shorthand property for ignoring a particular test case. See
+   * {@linkcode DenoTest.ignore}.
+   *
+   * @category Testing
+   */
+  export interface TestIgnore {
+    (t: Omit<TestDefinition, "ignore">): void;
+    (name: string, fn: (t: TestContext) => void | Promise<void>): void;
+    (fn: (t: TestContext) => void | Promise<void>): void;
+    (
       name: string,
       options: Omit<TestDefinition, "fn" | "name" | "ignore">,
       fn: (t: TestContext) => void | Promise<void>,
     ): void;
-
-    /** Shorthand property for ignoring a particular test case.
-     *
-     * @category Testing
-     */
-    ignore(
+    (
       options: Omit<TestDefinition, "fn" | "name" | "ignore">,
       fn: (t: TestContext) => void | Promise<void>,
     ): void;
-
-    /** Shorthand property for ignoring a particular test case.
-     *
-     * @category Testing
-     */
-    ignore(
+    (
       options: Omit<TestDefinition, "fn" | "ignore">,
       fn: (t: TestContext) => void | Promise<void>,
     ): void;
+    /** Register a parameterized group of ignored tests. See
+     * {@linkcode DenoTest.each}. */
+    each: TestEach;
+  }
 
-    /** Shorthand property for focusing a particular test case.
-     *
-     * @category Testing
-     */
-    only(t: Omit<TestDefinition, "only">): void;
-
-    /** Shorthand property for focusing a particular test case.
-     *
-     * @category Testing
-     */
-    only(name: string, fn: (t: TestContext) => void | Promise<void>): void;
-
-    /** Shorthand property for focusing a particular test case.
-     *
-     * @category Testing
-     */
-    only(fn: (t: TestContext) => void | Promise<void>): void;
-
-    /** Shorthand property for focusing a particular test case.
-     *
-     * @category Testing
-     */
-    only(
+  /** Shorthand property for focusing a particular test case. See
+   * {@linkcode DenoTest.only}.
+   *
+   * @category Testing
+   */
+  export interface TestOnly {
+    (t: Omit<TestDefinition, "only">): void;
+    (name: string, fn: (t: TestContext) => void | Promise<void>): void;
+    (fn: (t: TestContext) => void | Promise<void>): void;
+    (
       name: string,
       options: Omit<TestDefinition, "fn" | "name" | "only">,
       fn: (t: TestContext) => void | Promise<void>,
     ): void;
-
-    /** Shorthand property for focusing a particular test case.
-     *
-     * @category Testing
-     */
-    only(
+    (
       options: Omit<TestDefinition, "fn" | "name" | "only">,
       fn: (t: TestContext) => void | Promise<void>,
     ): void;
-
-    /** Shorthand property for focusing a particular test case.
-     *
-     * @category Testing
-     */
-    only(
+    (
       options: Omit<TestDefinition, "fn" | "only">,
       fn: (t: TestContext) => void | Promise<void>,
     ): void;
+    /** Register a parameterized group of focused tests. See
+     * {@linkcode DenoTest.each}. */
+    each: TestEach;
   }
 
   /**
@@ -1272,6 +1535,14 @@ declare namespace Deno {
   /**
    * Register a benchmark test which will be run when `deno bench` is used on
    * the command line and the containing module looks like a bench module.
+   *
+   * A module "looks like a bench module" when `deno bench` selects it for
+   * execution. When you pass explicit file paths to `deno bench`, those files
+   * are always run. When you run `deno bench` without paths, it walks the
+   * directory looking for files whose name (ignoring the extension) ends with
+   * `_bench` or `.bench`, or is exactly `bench`. Examples are `foo_bench.ts`,
+   * `foo.bench.js`, or `bench.ts`. Supported extensions are the same as for
+   * tests (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.mts`, `.cjs`, `.cts`).
    *
    * If the test function (`fn`) returns a promise or is async, the test runner
    * will await resolution to consider the test complete.
@@ -1470,7 +1741,8 @@ declare namespace Deno {
    *
    * If no exit code is supplied then Deno will exit with return code of `0`.
    *
-   * In worker contexts this is an alias to `self.close();`.
+   * In worker contexts this closes the current worker using Deno's internal
+   * worker close operation. It does not call the current `self.close` property.
    *
    * ```ts
    * Deno.exit(5);
@@ -1499,6 +1771,22 @@ declare namespace Deno {
 
   /** An interface containing methods to interact with the process environment
    * variables.
+   *
+   * Environment variables can also be loaded from a `.env` file by using the
+   * `--env-file` flag when running a Deno program:
+   *
+   * ```sh
+   * deno run --env-file=.env --allow-env main.ts
+   * ```
+   *
+   * If `--env-file` is specified without a value, it defaults to loading `.env`
+   * from the current working directory:
+   *
+   * ```sh
+   * deno run --env-file --allow-env main.ts
+   * ```
+   *
+   * Learn more at [the Deno docs](https://docs.deno.com/runtime/reference/env_variables/).
    *
    * @tags allow-env
    * @category Runtime
@@ -1628,9 +1916,6 @@ declare namespace Deno {
    *
    * Throws {@linkcode Deno.errors.NotFound} if directory not available.
    *
-   * Requires `allow-read` permission.
-   *
-   * @tags allow-read
    * @category Runtime
    */
   export function cwd(): string;
@@ -1793,6 +2078,11 @@ declare namespace Deno {
      *   console.log(decoder.decode(chunk));
      * }
      * ```
+     *
+     * Note that the readable stream *takes ownership of the file*: reading the
+     * stream to completion (or cancelling it) closes the file automatically, so
+     * you should not close the file yourself while the stream is still being
+     * consumed.
      */
     readonly readable: ReadableStream<Uint8Array<ArrayBuffer>>;
     /** A {@linkcode WritableStream} instance to write the contents of the
@@ -1808,6 +2098,10 @@ declare namespace Deno {
      *   await writer.write(encoder.encode(item));
      * }
      * ```
+     *
+     * Note that the writable stream *takes ownership of the file*: closing or
+     * aborting the stream closes the file automatically, so you should not
+     * close the file yourself while the stream is still in use.
      */
     readonly writable: WritableStream<Uint8Array<ArrayBufferLike>>;
     /** Write the contents of the array buffer (`p`) to the file.
@@ -2154,6 +2448,26 @@ declare namespace Deno {
      */
     lockSync(exclusive?: boolean): void;
     /**
+     * Try to acquire an advisory file-system lock for the file. Returns `true`
+     * if the lock was acquired, `false` if the file is already locked.
+     *
+     * Unlike {@linkcode Deno.FsFile.lock}, this method will not block if the
+     * lock cannot be acquired.
+     *
+     * @param [exclusive=false]
+     */
+    tryLock(exclusive?: boolean): Promise<boolean>;
+    /**
+     * Synchronously try to acquire an advisory file-system lock for the file.
+     * Returns `true` if the lock was acquired, `false` if the file is already locked.
+     *
+     * Unlike {@linkcode Deno.FsFile.lockSync}, this method will not block if the
+     * lock cannot be acquired.
+     *
+     * @param [exclusive=false]
+     */
+    tryLockSync(exclusive?: boolean): boolean;
+    /**
      * Release an advisory file-system lock for the file.
      */
     unlock(): Promise<void>;
@@ -2183,6 +2497,10 @@ declare namespace Deno {
    * This returns the size of the console window as reported by the operating
    * system. It's not a reflection of how many characters will fit within the
    * console window, but can be used as part of that calculation.
+   *
+   * Throws if none of stdin, stdout, or stderr is connected to a terminal
+   * (e.g. all are piped or redirected). Use {@linkcode Deno.stdout.isTerminal}
+   * to check before calling.
    *
    * @category I/O
    */
@@ -2529,7 +2847,8 @@ declare namespace Deno {
    * await Deno.mkdir("restricted_access_dir", { mode: 0o700 });
    * ```
    *
-   * Defaults to throwing error if the directory already exists.
+   * Throws if the directory already exists, unless `recursive` is set to
+   * `true`.
    *
    * Requires `allow-write` permission.
    *
@@ -2549,7 +2868,8 @@ declare namespace Deno {
    * Deno.mkdirSync("restricted_access_dir", { mode: 0o700 });
    * ```
    *
-   * Defaults to throwing error if the directory already exists.
+   * Throws if the directory already exists, unless `recursive` is set to
+   * `true`.
    *
    * Requires `allow-write` permission.
    *
@@ -2701,7 +3021,8 @@ declare namespace Deno {
    * | 1      | execute only |
    * | 0      | no permission |
    *
-   * NOTE: This API currently throws on Windows
+   * Note: On Windows, only the read and write permissions can be modified.
+   * Distinctions between owner, group, and others are not supported.
    *
    * Requires `allow-write` permission.
    *
@@ -2718,8 +3039,6 @@ declare namespace Deno {
    * ```
    *
    * For a full description, see {@linkcode Deno.chmod}.
-   *
-   * NOTE: This API currently throws on Windows
    *
    * Requires `allow-write` permission.
    *
@@ -2877,12 +3196,18 @@ declare namespace Deno {
   ): Promise<void>;
 
   /** Asynchronously reads and returns the entire contents of a file as an UTF-8
-   *  decoded string. Reading a directory throws an error.
+   *  decoded string.
    *
    * ```ts
    * const data = await Deno.readTextFile("hello.txt");
    * console.log(data);
    * ```
+   *
+   * The returned promise rejects if the operation fails, for example with
+   * {@linkcode Deno.errors.NotFound} if the file does not exist,
+   * {@linkcode Deno.errors.IsADirectory} if `path` refers to a directory, or
+   * {@linkcode Deno.errors.PermissionDenied} if the required permission has not
+   * been granted.
    *
    * Requires `allow-read` permission.
    *
@@ -2895,12 +3220,18 @@ declare namespace Deno {
   ): Promise<string>;
 
   /** Synchronously reads and returns the entire contents of a file as an UTF-8
-   *  decoded string. Reading a directory throws an error.
+   *  decoded string.
    *
    * ```ts
    * const data = Deno.readTextFileSync("hello.txt");
    * console.log(data);
    * ```
+   *
+   * Throws if the operation fails, for example with
+   * {@linkcode Deno.errors.NotFound} if the file does not exist,
+   * {@linkcode Deno.errors.IsADirectory} if `path` refers to a directory, or
+   * {@linkcode Deno.errors.PermissionDenied} if the required permission has not
+   * been granted.
    *
    * Requires `allow-read` permission.
    *
@@ -2983,17 +3314,15 @@ declare namespace Deno {
     ctime: Date | null;
     /** ID of the device containing the file. */
     dev: number;
-    /** Inode number.
-     *
-     * _Linux/Mac OS only._ */
+    /** Corresponds to the inode number on Unix systems. On Windows, this is
+     * the file index number that is unique within a volume. This may not be
+     * available on all platforms. */
     ino: number | null;
     /** The underlying raw `st_mode` bits that contain the standard Unix
      * permissions for this file/directory.
      */
     mode: number | null;
-    /** Number of hard links pointing to this file.
-     *
-     * _Linux/Mac OS only._ */
+    /** Number of hard links pointing to this file. */
     nlink: number | null;
     /** User ID of the owner of this file.
      *
@@ -3011,9 +3340,7 @@ declare namespace Deno {
      *
      * _Linux/Mac OS only._ */
     blksize: number | null;
-    /** Number of blocks allocated to the file, in 512-byte units.
-     *
-     * _Linux/Mac OS only._ */
+    /** Number of blocks allocated to the file, in 512-byte units. */
     blocks: number | null;
     /**  True if this is info for a block device.
      *
@@ -3356,6 +3683,13 @@ declare namespace Deno {
    * await Deno.writeTextFile("hello1.txt", "Hello world\n");  // overwrite "hello1.txt" or create it
    * ```
    *
+   * The data is written to the file and the file is closed, but this does not
+   * guarantee that the contents have been flushed from the operating system's
+   * buffers to the physical storage device. If you need such a durability
+   * guarantee (for example before signalling that a write has been committed),
+   * open the file with {@linkcode Deno.open} and call
+   * {@linkcode Deno.FsFile.sync} before closing it.
+   *
    * Requires `allow-write` permission, and `allow-read` if `options.create` is
    * `false`.
    *
@@ -3374,6 +3708,12 @@ declare namespace Deno {
    * ```ts
    * Deno.writeTextFileSync("hello1.txt", "Hello world\n");  // overwrite "hello1.txt" or create it
    * ```
+   *
+   * As with {@linkcode Deno.writeTextFile}, the data is written and the file is
+   * closed, but this does not guarantee the contents have been flushed from the
+   * operating system's buffers to the physical storage device. If you need such
+   * a durability guarantee, open the file with {@linkcode Deno.openSync} and
+   * call {@linkcode Deno.FsFile.syncSync} before closing it.
    *
    * Requires `allow-write` permission, and `allow-read` if `options.create` is
    * `false`.
@@ -3512,6 +3852,17 @@ declare namespace Deno {
    * }
    * ```
    *
+   * The `ignore` option can be used to filter out events for one or more paths.
+   * A path matches when it is, or is contained within, an ignored path, so
+   * ignoring a directory ignores everything beneath it. Relative paths are
+   * resolved against the current working directory. Ignored paths still
+   * require `allow-read` permission, the same as the watched paths.
+   *
+   * ```ts
+   * // Watch the project but skip the `.git` directory and `build` output.
+   * const watcher = Deno.watchFs(".", { ignore: [".git", "build"] });
+   * ```
+   *
    * Call `watcher.close()` to stop watching.
    *
    * ```ts
@@ -3533,7 +3884,7 @@ declare namespace Deno {
    */
   export function watchFs(
     paths: string | string[],
-    options?: { recursive: boolean },
+    options?: { recursive?: boolean; ignore?: string | string[] },
   ): FsWatcher;
 
   /** Operating signals which can be listened for or sent to sub-processes. What
@@ -3589,8 +3940,8 @@ declare namespace Deno {
    * );
    * ```
    *
-   * _Note_: On Windows only `"SIGINT"` (CTRL+C) and `"SIGBREAK"` (CTRL+Break)
-   * are supported.
+   * _Note_: On Windows only `"SIGINT"` (CTRL+C), `"SIGBREAK"` (CTRL+Break),
+   * `"SIGTERM"`, `"SIGQUIT"`, `"SIGHUP"`, and `"SIGWINCH"` are supported.
    *
    * @category Runtime
    */
@@ -3607,8 +3958,8 @@ declare namespace Deno {
    * Deno.removeSignalListener("SIGTERM", listener);
    * ```
    *
-   * _Note_: On Windows only `"SIGINT"` (CTRL+C) and `"SIGBREAK"` (CTRL+Break)
-   * are supported.
+   * _Note_: On Windows only `"SIGINT"` (CTRL+C), `"SIGBREAK"` (CTRL+Break),
+   * `"SIGTERM"`, `"SIGQUIT"`, `"SIGHUP"`, and `"SIGWINCH"` are supported.
    *
    * @category Runtime
    */
@@ -3720,22 +4071,26 @@ declare namespace Deno {
    */
   export class ChildProcess implements AsyncDisposable {
     get stdin(): WritableStream<Uint8Array<ArrayBufferLike>>;
-    get stdout(): ReadableStream<Uint8Array<ArrayBuffer>>;
-    get stderr(): ReadableStream<Uint8Array<ArrayBuffer>>;
+    get stdout(): SubprocessReadableStream;
+    get stderr(): SubprocessReadableStream;
     readonly pid: number;
-    /** Get the status of the child. */
+    /** A promise that resolves once the child process has exited, with its
+     * exit code and terminating signal (if any). The promise never rejects; if
+     * the process is still running the promise is pending. Accessing this
+     * property does not, on its own, prevent the Deno process from exiting -
+     * see {@linkcode ChildProcess.ref}. */
     readonly status: Promise<CommandStatus>;
 
     /** Waits for the child to exit completely, returning all its output and
      * status. */
     output(): Promise<CommandOutput>;
-    /** Kills the process with given {@linkcode Deno.Signal}.
+    /** Kills the process with given {@linkcode Deno.Signal} or numeric signal.
      *
      * Defaults to `SIGTERM` if no signal is provided.
      *
      * @param [signo="SIGTERM"]
      */
-    kill(signo?: Signal): void;
+    kill(signo?: Signal | number): void;
 
     /** Ensure that the status of the child process prevents the Deno process
      * from exiting. */
@@ -3745,6 +4100,36 @@ declare namespace Deno {
     unref(): void;
 
     [Symbol.asyncDispose](): Promise<void>;
+  }
+
+  /**
+   * The interface for stdout and stderr streams for child process returned from
+   * {@linkcode Deno.Command.spawn}.
+   *
+   * @category Subprocess
+   */
+  export interface SubprocessReadableStream
+    extends ReadableStream<Uint8Array<ArrayBuffer>> {
+    /**
+     * Reads the stream to completion. It returns a promise that resolves with
+     * an `ArrayBuffer`.
+     */
+    arrayBuffer(): Promise<ArrayBuffer>;
+    /**
+     * Reads the stream to completion. It returns a promise that resolves with
+     * a `Uint8Array`.
+     */
+    bytes(): Promise<Uint8Array<ArrayBuffer>>;
+    /**
+     * Reads the stream to completion. It returns a promise that resolves with
+     * the result of parsing the body text as JSON.
+     */
+    json(): Promise<any>;
+    /**
+     * Reads the stream to completion. It returns a promise that resolves with
+     * a `USVString` (text).
+     */
+    text(): Promise<string>;
   }
 
   /**
@@ -3851,6 +4236,168 @@ declare namespace Deno {
     /** The buffered output from the child process' `stderr`. */
     readonly stderr: Uint8Array<ArrayBuffer>;
   }
+
+  /** Spawns a new subprocess, returning a {@linkcode Deno.ChildProcess} handle.
+   *
+   * @experimental **UNSTABLE**: New API, yet to be vetted.
+   *
+   * This is a shorthand for `new Deno.Command(command, options).spawn()`.
+   *
+   * By default, `stdin`, `stdout`, and `stderr` are set to `"inherit"`.
+   *
+   * @example Spawn a subprocess
+   *
+   * ```ts
+   * const child = Deno.spawn(Deno.execPath(), {
+   *   args: ["eval", "console.log('hello')"],
+   *   stdout: "piped",
+   * });
+   * const output = await child.stdout.text();
+   * console.log(output); // "hello\n"
+   * const status = await child.status;
+   * ```
+   *
+   * @tags allow-run
+   * @category Subprocess
+   */
+  export function spawn(
+    command: string | URL,
+    options?: CommandOptions,
+  ): ChildProcess;
+  /** Spawns a new subprocess with the given arguments, returning a
+   * {@linkcode Deno.ChildProcess} handle.
+   *
+   * @experimental **UNSTABLE**: New API, yet to be vetted.
+   *
+   * This is a shorthand for `new Deno.Command(command, { ...options, args }).spawn()`.
+   *
+   * By default, `stdin`, `stdout`, and `stderr` are set to `"inherit"`.
+   *
+   * @example Spawn a subprocess with args
+   *
+   * ```ts
+   * const child = Deno.spawn(Deno.execPath(), ["eval", "console.log('hello')"], {
+   *   stdout: "piped",
+   * });
+   * const output = await child.stdout.text();
+   * console.log(output); // "hello\n"
+   * const status = await child.status;
+   * ```
+   *
+   * @tags allow-run
+   * @category Subprocess
+   */
+  export function spawn(
+    command: string | URL,
+    args: string[],
+    options?: Omit<CommandOptions, "args">,
+  ): ChildProcess;
+
+  /** Spawns a subprocess, waits for it to finish, and returns the output.
+   *
+   * @experimental **UNSTABLE**: New API, yet to be vetted.
+   *
+   * This is a shorthand for `new Deno.Command(command, options).output()`.
+   *
+   * Will throw an error if `stdin: "piped"` is set.
+   *
+   * @example Spawn and wait for output
+   *
+   * ```ts
+   * const { code, stdout, stderr } = await Deno.spawnAndWait(Deno.execPath(), {
+   *   args: ["eval", "console.log('hello')"],
+   * });
+   * console.log(new TextDecoder().decode(stdout)); // "hello\n"
+   * ```
+   *
+   * @tags allow-run
+   * @category Subprocess
+   */
+  export function spawnAndWait(
+    command: string | URL,
+    options?: CommandOptions,
+  ): Promise<CommandOutput>;
+  /** Spawns a subprocess with the given arguments, waits for it to finish,
+   * and returns the output.
+   *
+   * @experimental **UNSTABLE**: New API, yet to be vetted.
+   *
+   * This is a shorthand for `new Deno.Command(command, { ...options, args }).output()`.
+   *
+   * Will throw an error if `stdin: "piped"` is set.
+   *
+   * @example Spawn and wait with args
+   *
+   * ```ts
+   * const { code, stdout } = await Deno.spawnAndWait(
+   *   Deno.execPath(),
+   *   ["eval", "console.log('hello')"],
+   * );
+   * console.log(new TextDecoder().decode(stdout)); // "hello\n"
+   * ```
+   *
+   * @tags allow-run
+   * @category Subprocess
+   */
+  export function spawnAndWait(
+    command: string | URL,
+    args: string[],
+    options?: Omit<CommandOptions, "args">,
+  ): Promise<CommandOutput>;
+
+  /** Synchronously spawns a subprocess, waits for it to finish, and returns
+   * the output.
+   *
+   * @experimental **UNSTABLE**: New API, yet to be vetted.
+   *
+   * This is a shorthand for `new Deno.Command(command, options).outputSync()`.
+   *
+   * Will throw an error if `stdin: "piped"` is set.
+   *
+   * @example Spawn and wait synchronously
+   *
+   * ```ts
+   * const { code, stdout } = Deno.spawnAndWaitSync(Deno.execPath(), {
+   *   args: ["eval", "console.log('hello')"],
+   * });
+   * console.log(new TextDecoder().decode(stdout)); // "hello\n"
+   * ```
+   *
+   * @tags allow-run
+   * @category Subprocess
+   */
+  export function spawnAndWaitSync(
+    command: string | URL,
+    options?: CommandOptions,
+  ): CommandOutput;
+  /** Synchronously spawns a subprocess with the given arguments, waits for it
+   * to finish, and returns the output.
+   *
+   * @experimental **UNSTABLE**: New API, yet to be vetted.
+   *
+   * This is a shorthand for
+   * `new Deno.Command(command, { ...options, args }).outputSync()`.
+   *
+   * Will throw an error if `stdin: "piped"` is set.
+   *
+   * @example Spawn and wait synchronously with args
+   *
+   * ```ts
+   * const { code, stdout } = Deno.spawnAndWaitSync(
+   *   Deno.execPath(),
+   *   ["eval", "console.log('hello')"],
+   * );
+   * console.log(new TextDecoder().decode(stdout)); // "hello\n"
+   * ```
+   *
+   * @tags allow-run
+   * @category Subprocess
+   */
+  export function spawnAndWaitSync(
+    command: string | URL,
+    args: string[],
+    options?: Omit<CommandOptions, "args">,
+  ): CommandOutput;
 
   /** Option which can be specified when performing {@linkcode Deno.inspect}.
    *
@@ -4067,7 +4614,9 @@ declare namespace Deno {
       | "homedir"
       | "statfs"
       | "getPriority"
-      | "setPriority";
+      | "setPriority"
+      | "ca"
+      | "umask";
   }
 
   /** The permission descriptor for the `allow-ffi` and `deny-ffi` permissions, which controls
@@ -4414,13 +4963,13 @@ declare namespace Deno {
    * Give the following command line invocation of Deno:
    *
    * ```sh
-   * deno run --allow-read https://examples.deno.land/command-line-arguments.ts Sushi
+   * deno eval "console.log(Deno.args)" Sushi Maguro Hamachi
    * ```
    *
    * Then `Deno.args` will contain:
    *
    * ```ts
-   * [ "Sushi" ]
+   * [ "Sushi", "Maguro", "Hamachi" ]
    * ```
    *
    * If you are looking for a structured way to parse arguments, there is
@@ -4461,7 +5010,12 @@ declare namespace Deno {
    * await Deno.symlink("old/name", "new/name");
    * ```
    *
-   * Requires full `allow-read` and `allow-write` permissions.
+   * Requires `allow-read` and `allow-write` permissions granted *without* a
+   * path scope (i.e. `--allow-read --allow-write`, not
+   * `--allow-read=./dir --allow-write=./dir`). A symlink's target may be a
+   * relative, absolute, or not-yet-existing path that is only resolved when the
+   * link is later traversed, so it cannot be checked against a path-scoped
+   * allow-list at creation time. Path-scoped grants are therefore rejected.
    *
    * @tags allow-read, allow-write
    * @category File System
@@ -4482,7 +5036,12 @@ declare namespace Deno {
    * Deno.symlinkSync("old/name", "new/name");
    * ```
    *
-   * Requires full `allow-read` and `allow-write` permissions.
+   * Requires `allow-read` and `allow-write` permissions granted *without* a
+   * path scope (i.e. `--allow-read --allow-write`, not
+   * `--allow-read=./dir --allow-write=./dir`). A symlink's target may be a
+   * relative, absolute, or not-yet-existing path that is only resolved when the
+   * link is later traversed, so it cannot be checked against a path-scoped
+   * allow-list at creation time. Path-scoped grants are therefore rejected.
    *
    * @tags allow-read, allow-write
    * @category File System
@@ -4542,11 +5101,11 @@ declare namespace Deno {
    * console.log(Deno.umask());  // e.g. 63 (0o077)
    * ```
    *
-   * This API is under consideration to determine if permissions are required to
-   * call it.
+   * Requires `allow-sys="umask"` permission.
    *
    * *Note*: This API is not implemented on Windows
    *
+   * @tags allow-sys
    * @category File System
    */
   export function umask(mask?: number): number;
@@ -4583,6 +5142,33 @@ declare namespace Deno {
      * The unit is seconds, with a default of 30.
      * Set to `0` to disable timeouts. */
     idleTimeout?: number;
+    /** A `node:net` `Socket` from a `node:http` server's `"upgrade"` event.
+     * When provided, the WebSocket upgrade is performed over this existing
+     * TCP connection instead of through `Deno.serve`'s built-in upgrade
+     * mechanism. The 101 Switching Protocols response is written
+     * automatically.
+     *
+     * ```ts ignore
+     * import http from "node:http";
+     *
+     * const server = http.createServer();
+     * server.on("upgrade", (req, socket, head) => {
+     *   const { socket: ws } = Deno.upgradeWebSocket(
+     *     new Request(`http://${req.headers.host}/`, {
+     *       headers: req.headers as HeadersInit,
+     *     }),
+     *     { socket: socket as import("node:net").Socket, head },
+     *   );
+     *   ws.onmessage = (e) => ws.send(e.data);
+     * });
+     * ```
+     */
+    socket?: import("node:net").Socket;
+    /** Extra bytes already buffered by the HTTP parser that arrived with
+     * the upgrade request headers. This is the `head` `Buffer` from the
+     * `node:http` server's `"upgrade"` event and must be forwarded so
+     * those bytes are not lost. */
+    head?: Uint8Array;
   }
 
   /**
@@ -4642,12 +5228,14 @@ declare namespace Deno {
    * Deno.kill(child.pid, "SIGINT");
    * ```
    *
+   * As a special case, a signal of 0 can be used to test for the existence of a process.
+   *
    * Requires `allow-run` permission.
    *
    * @tags allow-run
    * @category Subprocess
    */
-  export function kill(pid: number, signo?: Signal): void;
+  export function kill(pid: number, signo?: Signal | number): void;
 
   /** The type of the resource record to resolve via DNS using
    * {@linkcode Deno.resolveDns}.
@@ -4778,12 +5366,17 @@ declare namespace Deno {
    *   beyond the range of 16-bit unsigned integer.
    * - the request timed out.
    *
+   * The `"A"`, `"AAAA"`, `"ANAME"`, `"CNAME"`, `"NS"` and `"PTR"` record types
+   * resolve to an array of strings.
+   *
    * ```ts
    * const a = await Deno.resolveDns("example.com", "A");
+   * // ["93.184.215.14"]
    *
    * const aaaa = await Deno.resolveDns("example.com", "AAAA", {
    *   nameServer: { ipAddr: "8.8.8.8", port: 53 },
    * });
+   * // ["2606:2800:21f:cb07:6820:80da:af6b:8b2c"]
    * ```
    *
    * Requires `allow-net` permission.
@@ -4808,12 +5401,12 @@ declare namespace Deno {
    *   beyond the range of 16-bit unsigned integer.
    * - the request timed out.
    *
-   * ```ts
-   * const a = await Deno.resolveDns("example.com", "A");
+   * The `"CAA"` record type resolves to an array of
+   * {@linkcode Deno.CaaRecord} objects.
    *
-   * const aaaa = await Deno.resolveDns("example.com", "AAAA", {
-   *   nameServer: { ipAddr: "8.8.8.8", port: 53 },
-   * });
+   * ```ts
+   * const caa = await Deno.resolveDns("example.com", "CAA");
+   * // [{ critical: false, tag: "issue", value: "letsencrypt.org" }]
    * ```
    *
    * Requires `allow-net` permission.
@@ -4838,12 +5431,12 @@ declare namespace Deno {
    *   beyond the range of 16-bit unsigned integer.
    * - the request timed out.
    *
-   * ```ts
-   * const a = await Deno.resolveDns("example.com", "A");
+   * The `"MX"` record type resolves to an array of
+   * {@linkcode Deno.MxRecord} objects.
    *
-   * const aaaa = await Deno.resolveDns("example.com", "AAAA", {
-   *   nameServer: { ipAddr: "8.8.8.8", port: 53 },
-   * });
+   * ```ts
+   * const mx = await Deno.resolveDns("example.com", "MX");
+   * // [{ preference: 10, exchange: "mail.example.com" }]
    * ```
    *
    * Requires `allow-net` permission.
@@ -4868,12 +5461,19 @@ declare namespace Deno {
    *   beyond the range of 16-bit unsigned integer.
    * - the request timed out.
    *
-   * ```ts
-   * const a = await Deno.resolveDns("example.com", "A");
+   * The `"NAPTR"` record type resolves to an array of
+   * {@linkcode Deno.NaptrRecord} objects.
    *
-   * const aaaa = await Deno.resolveDns("example.com", "AAAA", {
-   *   nameServer: { ipAddr: "8.8.8.8", port: 53 },
-   * });
+   * ```ts
+   * const naptr = await Deno.resolveDns("example.com", "NAPTR");
+   * // [{
+   * //   order: 100,
+   * //   preference: 10,
+   * //   flags: "S",
+   * //   services: "SIP+D2U",
+   * //   regexp: "",
+   * //   replacement: "_sip._udp.example.com",
+   * // }]
    * ```
    *
    * Requires `allow-net` permission.
@@ -4898,12 +5498,20 @@ declare namespace Deno {
    *   beyond the range of 16-bit unsigned integer.
    * - the request timed out.
    *
-   * ```ts
-   * const a = await Deno.resolveDns("example.com", "A");
+   * The `"SOA"` record type resolves to an array of
+   * {@linkcode Deno.SoaRecord} objects.
    *
-   * const aaaa = await Deno.resolveDns("example.com", "AAAA", {
-   *   nameServer: { ipAddr: "8.8.8.8", port: 53 },
-   * });
+   * ```ts
+   * const soa = await Deno.resolveDns("example.com", "SOA");
+   * // [{
+   * //   mname: "ns.example.com",
+   * //   rname: "hostmaster.example.com",
+   * //   serial: 2024010101,
+   * //   refresh: 7200,
+   * //   retry: 3600,
+   * //   expire: 1209600,
+   * //   minimum: 3600,
+   * // }]
    * ```
    *
    * Requires `allow-net` permission.
@@ -4928,12 +5536,12 @@ declare namespace Deno {
    *   beyond the range of 16-bit unsigned integer.
    * - the request timed out.
    *
-   * ```ts
-   * const a = await Deno.resolveDns("example.com", "A");
+   * The `"SRV"` record type resolves to an array of
+   * {@linkcode Deno.SrvRecord} objects.
    *
-   * const aaaa = await Deno.resolveDns("example.com", "AAAA", {
-   *   nameServer: { ipAddr: "8.8.8.8", port: 53 },
-   * });
+   * ```ts
+   * const srv = await Deno.resolveDns("_sip._tcp.example.com", "SRV");
+   * // [{ priority: 10, weight: 5, port: 5060, target: "sip.example.com" }]
    * ```
    *
    * Requires `allow-net` permission.
@@ -4958,12 +5566,12 @@ declare namespace Deno {
    *   beyond the range of 16-bit unsigned integer.
    * - the request timed out.
    *
-   * ```ts
-   * const a = await Deno.resolveDns("example.com", "A");
+   * The `"TXT"` record type resolves to an array of string arrays, since a
+   * single TXT record can be split into multiple character strings.
    *
-   * const aaaa = await Deno.resolveDns("example.com", "AAAA", {
-   *   nameServer: { ipAddr: "8.8.8.8", port: 53 },
-   * });
+   * ```ts
+   * const txt = await Deno.resolveDns("example.com", "TXT");
+   * // [["v=spf1 include:_spf.example.com ~all"]]
    * ```
    *
    * Requires `allow-net` permission.
@@ -4988,10 +5596,14 @@ declare namespace Deno {
    *   beyond the range of 16-bit unsigned integer.
    * - the request timed out.
    *
-   * ```ts
-   * const a = await Deno.resolveDns("example.com", "A");
+   * This overload is selected when the record type is only known at runtime. The
+   * shape of each resolved record depends on the {@linkcode Deno.RecordType}
+   * that was requested - see the more specific overloads above for the exact
+   * return type of each record type.
    *
-   * const aaaa = await Deno.resolveDns("example.com", "AAAA", {
+   * ```ts
+   * const recordType: Deno.RecordType = "A";
+   * const records = await Deno.resolveDns("example.com", recordType, {
    *   nameServer: { ipAddr: "8.8.8.8", port: 53 },
    * });
    * ```
@@ -5020,14 +5632,14 @@ declare namespace Deno {
    *
    * @category Runtime
    */
-  export function refTimer(id: number): void;
+  export function refTimer(id: number | NodeJS.Timeout): void;
 
   /**
    * Make the timer of the given `id` not block the event loop from finishing.
    *
    * @category Runtime
    */
-  export function unrefTimer(id: number): void;
+  export function unrefTimer(id: number | NodeJS.Timeout): void;
 
   /**
    * Returns the user id of the process on POSIX platforms. Returns null on Windows.
@@ -5064,11 +5676,26 @@ declare namespace Deno {
   export interface ServeHandlerInfo<Addr extends Deno.Addr = Deno.Addr> {
     /** The remote address of the connection. */
     remoteAddr: Addr;
-    /** The completion promise */
+    /** A promise that settles when the request has been fully handled and the
+     * response has been sent.
+     *
+     * It resolves once the response (including its body) has been completely
+     * delivered to the client. It **rejects** with a
+     * {@linkcode Deno.errors.Interrupted} error if the response could not be
+     * sent successfully — for example when the client
+     * disconnects before the response body has been fully written. Attach a
+     * `.catch()` (or wrap an `await` in `try`/`catch`) if you need to observe
+     * these failures. */
     completed: Promise<void>;
   }
 
   /** A handler for HTTP requests. Consumes a request and returns a response.
+   *
+   * The `request` argument is a standard Web platform {@linkcode Request}, and
+   * the handler must return a standard Web platform {@linkcode Response} (or a
+   * promise resolving to one). These are the same `Request` and `Response`
+   * classes available as globals in Deno and in browsers, so the body, headers,
+   * URL, and method can all be read from the incoming `Request`.
    *
    * If a handler throws, the server calling the handler will assume the impact
    * of the error is isolated to the individual request. It will catch the error
@@ -5127,6 +5754,14 @@ declare namespace Deno {
 
     /** The callback which is called when the server starts listening. */
     onListen?: (localAddr: Addr) => void;
+
+    /**
+     * Whether to automatically compress response bodies when the client accepts
+     * a supported encoding and the response is compressible.
+     *
+     * @default {false}
+     */
+    automaticCompression?: boolean;
   }
 
   /**
@@ -5158,6 +5793,18 @@ declare namespace Deno {
 
     /** Sets `SO_REUSEPORT` on POSIX systems. */
     reusePort?: boolean;
+
+    /** Maximum number of pending connections in the listen queue.
+     *
+     * This parameter controls how many incoming connections can be queued by the
+     * operating system while waiting for the application to accept them. If more
+     * connections arrive when the queue is full, they will be refused.
+     *
+     * The kernel may adjust this value (e.g., rounding up to the next power of 2
+     * plus 1). Different operating systems have different maximum limits.
+     *
+     * @default {511} */
+    tcpBacklog?: number;
   }
 
   /**
@@ -5622,7 +6269,7 @@ declare namespace Deno {
    * @category FFI
    */
   export type ToNativeType<T extends NativeType = NativeType> = T extends
-    NativeStructType ? BufferSource
+    NativeStructType ? AllowSharedBufferSource
     : T extends NativeNumberType ? T extends NativeU8Enum<infer U> ? U
       : T extends NativeI8Enum<infer U> ? U
       : T extends NativeU16Enum<infer U> ? U
@@ -5638,7 +6285,7 @@ declare namespace Deno {
     : T extends NativeFunctionType
       ? T extends NativeTypedFunction<infer U> ? PointerValue<U> | null
       : PointerValue
-    : T extends NativeBufferType ? BufferSource | null
+    : T extends NativeBufferType ? AllowSharedBufferSource | null
     : never;
 
   /** Type conversion for unsafe callback return types.
@@ -5647,7 +6294,7 @@ declare namespace Deno {
    */
   export type ToNativeResultType<
     T extends NativeResultType = NativeResultType,
-  > = T extends NativeStructType ? BufferSource
+  > = T extends NativeStructType ? AllowSharedBufferSource
     : T extends NativeNumberType ? T extends NativeU8Enum<infer U> ? U
       : T extends NativeI8Enum<infer U> ? U
       : T extends NativeU16Enum<infer U> ? U
@@ -5663,7 +6310,7 @@ declare namespace Deno {
     : T extends NativeFunctionType
       ? T extends NativeTypedFunction<infer U> ? PointerObject<U> | null
       : PointerValue
-    : T extends NativeBufferType ? BufferSource | null
+    : T extends NativeBufferType ? AllowSharedBufferSource | null
     : T extends NativeVoidType ? void
     : never;
 
@@ -5868,7 +6515,7 @@ declare namespace Deno {
     static equals<T = unknown>(a: PointerValue<T>, b: PointerValue<T>): boolean;
     /** Return the direct memory pointer to the typed array in memory. */
     static of<T = unknown>(
-      value: Deno.UnsafeCallback | BufferSource,
+      value: Deno.UnsafeCallback | AllowSharedBufferSource,
     ): PointerValue<T>;
     /** Return a new pointer offset from the original by `offset` bytes. */
     static offset<T = unknown>(
@@ -5925,11 +6572,17 @@ declare namespace Deno {
     getFloat64(offset?: number): number;
     /** Gets a pointer at the specified byte offset from the pointer */
     getPointer<T = unknown>(offset?: number): PointerValue<T>;
-    /** Gets a C string (`null` terminated string) at the specified byte offset
-     * from the pointer. */
+    /** Gets a UTF-8 encoded string at the specified byte offset until 0 byte.
+     *
+     * Returned string doesn't include U+0000 character.
+     *
+     * Invalid UTF-8 characters are replaced with U+FFFD character in the returned string. */
     getCString(offset?: number): string;
-    /** Gets a C string (`null` terminated string) at the specified byte offset
-     * from the specified pointer. */
+    /** Gets a UTF-8 encoded string at the specified byte offset from the specified pointer until 0 byte.
+     *
+     * Returned string doesn't include U+0000 character.
+     *
+     * Invalid UTF-8 characters are replaced with U+FFFD character in the returned string. */
     static getCString(pointer: PointerObject, offset?: number): string;
     /** Gets an `ArrayBuffer` of length `byteLength` at the specified byte
      * offset from the pointer. */
@@ -5946,7 +6599,7 @@ declare namespace Deno {
      * Length is determined from the typed array's `byteLength`.
      *
      * Also takes optional byte offset from the pointer. */
-    copyInto(destination: BufferSource, offset?: number): void;
+    copyInto(destination: AllowSharedBufferSource, offset?: number): void;
     /** Copies the memory of the specified pointer into a typed array.
      *
      * Length is determined from the typed array's `byteLength`.
@@ -5954,7 +6607,7 @@ declare namespace Deno {
      * Also takes optional byte offset from the pointer. */
     static copyInto(
       pointer: PointerObject,
-      destination: BufferSource,
+      destination: AllowSharedBufferSource,
       offset?: number,
     ): void;
   }
@@ -6225,6 +6878,11 @@ declare namespace Deno {
     allowHost?: boolean;
     /** Sets the local address where the socket will connect from. */
     localAddress?: string;
+    /** Sets the max HTTP/2 header list size (in bytes) that the client will
+     * accept. This maps to the `SETTINGS_MAX_HEADER_LIST_SIZE` HTTP/2 setting.
+     *
+     * If not set, the default value from the underlying HTTP library is used. */
+    http2MaxHeaderListSize?: number;
   }
 
   /**
@@ -6232,10 +6890,11 @@ declare namespace Deno {
    * {@linkcode Deno.CreateHttpClientOptions}.
    *
    * Supported proxies:
-   *  - HTTP/HTTPS proxy: this uses the HTTP CONNECT method to tunnel HTTP
-   *    requests through a different server.
+   *  - HTTP/HTTPS proxy: this uses passthrough to tunnel HTTP requests, or HTTP
+   *    CONNECT to tunnel HTTPS requests through a different server.
    *  - SOCKS5 proxy: this uses the SOCKS5 protocol to tunnel TCP connections
    *    through a different server.
+   *  - TCP socket: this sends all requests to a specified TCP socket.
    *  - Unix domain socket: this sends all requests to a local Unix domain
    *    socket rather than a TCP socket. *Not supported on Windows.*
    *  - Vsock socket: this sends all requests to a local vsock socket.
@@ -6257,6 +6916,12 @@ declare namespace Deno {
     url: string;
     /** The basic auth credentials to be used against the proxy server. */
     basicAuth?: BasicAuth;
+  } | {
+    transport: "tcp";
+    /** The hostname of the TCP server to connect to. */
+    hostname: string;
+    /** The port of the TCP server to connect to. */
+    port: number;
   } | {
     transport: "unix";
     /** The path to the unix domain socket to use. */
@@ -6405,7 +7070,7 @@ declare namespace Deno {
   export {}; // only export exports
 }
 
-// Copyright 2018-2025 the Deno authors. MIT license.
+// Copyright 2018-2026 the Deno authors. MIT license.
 
 // deno-lint-ignore-file no-explicit-any
 
@@ -6664,7 +7329,7 @@ interface Console {
   profileEnd(label?: string): void;
 }
 
-// Copyright 2018-2025 the Deno authors. MIT license.
+// Copyright 2018-2026 the Deno authors. MIT license.
 
 // deno-lint-ignore-file no-explicit-any no-var
 
@@ -6853,7 +7518,15 @@ interface URLSearchParams {
   readonly size: number;
 }
 
-/** @category URL */
+/** The URLSearchParams interface defines utility methods to work with the
+ * query string of a URL. An object implementing URLSearchParams can directly
+ * be used in a `for...of` structure to iterate over key/value pairs in the
+ * same order as they appear in the query string.
+ *
+ * @see https://developer.mozilla.org/docs/Web/API/URLSearchParams
+ *
+ * @category URL
+ */
 declare var URLSearchParams: {
   readonly prototype: URLSearchParams;
   /**
@@ -7518,7 +8191,7 @@ declare var URLPattern: {
   new (input?: URLPatternInput, options?: URLPatternOptions): URLPattern;
 };
 
-// Copyright 2018-2025 the Deno authors. MIT license.
+// Copyright 2018-2026 the Deno authors. MIT license.
 
 // deno-lint-ignore-file no-explicit-any no-var
 
@@ -7558,7 +8231,11 @@ interface DOMException extends Error {
   readonly DATA_CLONE_ERR: 25;
 }
 
-/** @category Platform */
+/** The constructor object for {@linkcode DOMException}, used to construct an
+ * exception describing an abnormal event raised by a web API. It also exposes
+ * the legacy numeric error code constants (e.g. `ABORT_ERR`).
+ *
+ * @category Platform */
 declare var DOMException: {
   readonly prototype: DOMException;
   new (message?: string, name?: string): DOMException;
@@ -7587,6 +8264,34 @@ declare var DOMException: {
   readonly TIMEOUT_ERR: 23;
   readonly INVALID_NODE_TYPE_ERR: 24;
   readonly DATA_CLONE_ERR: 25;
+};
+
+/** @category Platform */
+interface QuotaExceededErrorOptions {
+  quota?: number;
+  requested?: number;
+}
+
+/**
+ * Represents an error when a quota has been exceeded.
+ *
+ * @category Platform
+ */
+interface QuotaExceededError extends DOMException {
+  readonly quota: number | null;
+  readonly requested: number | null;
+}
+
+/** The constructor object for {@linkcode QuotaExceededError}, used to construct
+ * an error thrown when an operation would exceed an enforced quota.
+ *
+ * @category Platform */
+declare var QuotaExceededError: {
+  readonly prototype: QuotaExceededError;
+  new (
+    message?: string,
+    options?: QuotaExceededErrorOptions,
+  ): QuotaExceededError;
 };
 
 /** @category Events */
@@ -7947,10 +8652,14 @@ interface TextDecoder extends TextDecoderCommon {
   /** Turns binary data, often in the form of a Uint8Array, into a string given
    * the encoding.
    */
-  decode(input?: BufferSource, options?: TextDecodeOptions): string;
+  decode(input?: AllowSharedBufferSource, options?: TextDecodeOptions): string;
 }
 
-/** @category Encoding */
+/** The constructor object for {@linkcode TextDecoder}, used to create a decoder
+ * for a given text encoding (UTF-8 by default) that turns byte streams into
+ * strings.
+ *
+ * @category Encoding */
 declare var TextDecoder: {
   readonly prototype: TextDecoder;
   new (label?: string, options?: TextDecoderOptions): TextDecoder;
@@ -7972,12 +8681,6 @@ interface TextEncoderEncodeIntoResult {
   written: number;
 }
 
-/** @category Encoding */
-interface TextEncoder extends TextEncoderCommon {
-  /** Returns the result of running UTF-8's encoder. */
-  encode(input?: string): Uint8Array;
-  encodeInto(input: string, dest: Uint8Array): TextEncoderEncodeIntoResult;
-}
 /**
  * Allows you to convert a string into binary data (in the form of a Uint8Array)
  * given the encoding.
@@ -7994,13 +8697,19 @@ interface TextEncoder extends TextEncoderCommon {
  */
 interface TextEncoder extends TextEncoderCommon {
   /** Turns a string into binary data (in the form of a Uint8Array) using UTF-8 encoding. */
-  encode(input?: string): Uint8Array;
+  encode(input?: string): Uint8Array<ArrayBuffer>;
 
   /** Encodes a string into the destination Uint8Array and returns the result of the encoding. */
-  encodeInto(input: string, dest: Uint8Array): TextEncoderEncodeIntoResult;
+  encodeInto(
+    input: string,
+    dest: Uint8Array<ArrayBufferLike>,
+  ): TextEncoderEncodeIntoResult;
 }
 
-/** @category Encoding */
+/** The constructor object for {@linkcode TextEncoder}, used to create an
+ * encoder that turns strings into UTF-8 encoded bytes.
+ *
+ * @category Encoding */
 declare var TextEncoder: {
   readonly prototype: TextEncoder;
   new (): TextEncoder;
@@ -8015,10 +8724,13 @@ interface TextEncoderCommon {
 /** @category Encoding */
 interface TextDecoderStream extends GenericTransformStream, TextDecoderCommon {
   readonly readable: ReadableStream<string>;
-  readonly writable: WritableStream<BufferSource>;
+  readonly writable: WritableStream<AllowSharedBufferSource>;
 }
 
-/** @category Encoding */
+/** The constructor object for {@linkcode TextDecoderStream}, used to create a
+ * transform stream that decodes a stream of bytes into a stream of strings.
+ *
+ * @category Encoding */
 declare var TextDecoderStream: {
   readonly prototype: TextDecoderStream;
   new (label?: string, options?: TextDecoderOptions): TextDecoderStream;
@@ -8026,11 +8738,15 @@ declare var TextDecoderStream: {
 
 /** @category Encoding */
 interface TextEncoderStream extends GenericTransformStream, TextEncoderCommon {
-  readonly readable: ReadableStream<Uint8Array>;
+  readonly readable: ReadableStream<Uint8Array<ArrayBuffer>>;
   readonly writable: WritableStream<string>;
 }
 
-/** @category Encoding */
+/** The constructor object for {@linkcode TextEncoderStream}, used to create a
+ * transform stream that encodes a stream of strings into a stream of UTF-8
+ * bytes.
+ *
+ * @category Encoding */
 declare var TextEncoderStream: {
   readonly prototype: TextEncoderStream;
   new (): TextEncoderStream;
@@ -8101,7 +8817,13 @@ interface AbortSignal extends EventTarget {
   throwIfAborted(): void;
 }
 
-/** @category Platform */
+/** The constructor object for {@linkcode AbortSignal}.
+ *
+ * `AbortSignal` instances are obtained from an `AbortController` or via the
+ * static `abort`, `timeout`, and `any` factory methods rather than constructed
+ * directly, so calling the constructor throws.
+ *
+ * @category Platform */
 declare var AbortSignal: {
   readonly prototype: AbortSignal;
   new (): never;
@@ -8172,7 +8894,11 @@ interface FileReader extends EventTarget {
   ): void;
 }
 
-/** @category File */
+/** The constructor object for {@linkcode FileReader}, used to create a reader
+ * that asynchronously reads the contents of a {@linkcode Blob} or
+ * {@linkcode File} into memory.
+ *
+ * @category File */
 declare var FileReader: {
   readonly prototype: FileReader;
   new (): FileReader;
@@ -8204,10 +8930,13 @@ interface Blob {
   readonly size: number;
   readonly type: string;
   arrayBuffer(): Promise<ArrayBuffer>;
-  bytes(): Promise<Uint8Array>;
+  bytes(): Promise<Uint8Array<ArrayBuffer>>;
   slice(start?: number, end?: number, contentType?: string): Blob;
-  stream(): ReadableStream<Uint8Array>;
+  stream(): ReadableStream<Uint8Array<ArrayBuffer>>;
   text(): Promise<string>;
+  /** Returns a `ReadableStream<string>` that streams the blob's data decoded
+   * as UTF-8 text. */
+  textStream(): ReadableStream<string>;
 }
 
 /** A file-like object of immutable, raw data. Blobs represent data that isn't
@@ -8260,7 +8989,7 @@ type ReadableStreamController<T> =
 
 /** @category Streams */
 interface ReadableStreamGenericReader {
-  readonly closed: Promise<undefined>;
+  readonly closed: Promise<void>;
   cancel(reason?: any): Promise<void>;
 }
 
@@ -8288,7 +9017,11 @@ interface ReadableStreamDefaultReader<R = any>
   releaseLock(): void;
 }
 
-/** @category Streams */
+/** The constructor object for {@linkcode ReadableStreamDefaultReader}, used to
+ * create a default reader locked to the given {@linkcode ReadableStream}. Most
+ * code obtains one via {@linkcode ReadableStream.getReader} instead.
+ *
+ * @category Streams */
 declare var ReadableStreamDefaultReader: {
   readonly prototype: ReadableStreamDefaultReader;
   new <R = any>(stream: ReadableStream<R>): ReadableStreamDefaultReader<R>;
@@ -8308,20 +9041,31 @@ interface ReadableStreamBYOBReader extends ReadableStreamGenericReader {
   releaseLock(): void;
 }
 
-/** @category Streams */
+/** The constructor object for {@linkcode ReadableStreamBYOBReader}, used to
+ * create a "bring your own buffer" reader locked to the given byte stream. Most
+ * code obtains one via `ReadableStream.getReader({ mode: "byob" })` instead.
+ *
+ * @category Streams */
 declare var ReadableStreamBYOBReader: {
   readonly prototype: ReadableStreamBYOBReader;
-  new (stream: ReadableStream<Uint8Array>): ReadableStreamBYOBReader;
+  new (
+    stream: ReadableStream<Uint8Array<ArrayBuffer>>,
+  ): ReadableStreamBYOBReader;
 };
 
 /** @category Streams */
 interface ReadableStreamBYOBRequest {
-  readonly view: ArrayBufferView | null;
+  readonly view: Uint8Array<ArrayBuffer> | null;
   respond(bytesWritten: number): void;
   respondWithNewView(view: ArrayBufferView): void;
 }
 
-/** @category Streams */
+/** The constructor object for {@linkcode ReadableStreamBYOBRequest}.
+ *
+ * Instances are provided to a byte stream's controller rather than constructed
+ * directly, so calling the constructor throws.
+ *
+ * @category Streams */
 declare var ReadableStreamBYOBRequest: {
   readonly prototype: ReadableStreamBYOBRequest;
   new (): never;
@@ -8390,7 +9134,13 @@ interface ReadableStreamDefaultController<R = any> {
   error(e?: any): void;
 }
 
-/** @category Streams */
+/** The constructor object for {@linkcode ReadableStreamDefaultController}.
+ *
+ * Instances are passed to a {@linkcode ReadableStream}'s underlying source
+ * callbacks rather than constructed directly, so calling the constructor
+ * throws.
+ *
+ * @category Streams */
 declare var ReadableStreamDefaultController: {
   readonly prototype: ReadableStreamDefaultController;
   new (): never;
@@ -8405,7 +9155,13 @@ interface ReadableByteStreamController {
   error(e?: any): void;
 }
 
-/** @category Streams */
+/** The constructor object for {@linkcode ReadableByteStreamController}.
+ *
+ * Instances are passed to a byte-oriented {@linkcode ReadableStream}'s
+ * underlying source callbacks rather than constructed directly, so calling the
+ * constructor throws.
+ *
+ * @category Streams */
 declare var ReadableByteStreamController: {
   readonly prototype: ReadableByteStreamController;
   new (): never;
@@ -8440,7 +9196,11 @@ interface CountQueuingStrategy extends QueuingStrategy {
   readonly size: QueuingStrategySize;
 }
 
-/** @category Streams */
+/** The constructor object for {@linkcode CountQueuingStrategy}, used to create a
+ * queuing strategy that counts each chunk as a single unit toward the stream's
+ * high water mark.
+ *
+ * @category Streams */
 declare var CountQueuingStrategy: {
   readonly prototype: CountQueuingStrategy;
   new (init: QueuingStrategyInit): CountQueuingStrategy;
@@ -8452,7 +9212,11 @@ interface ByteLengthQueuingStrategy extends QueuingStrategy<ArrayBufferView> {
   readonly size: QueuingStrategySize<ArrayBufferView>;
 }
 
-/** @category Streams */
+/** The constructor object for {@linkcode ByteLengthQueuingStrategy}, used to
+ * create a queuing strategy that measures each chunk by its `byteLength` toward
+ * the stream's high water mark.
+ *
+ * @category Streams */
 declare var ByteLengthQueuingStrategy: {
   readonly prototype: ByteLengthQueuingStrategy;
   new (init: QueuingStrategyInit): ByteLengthQueuingStrategy;
@@ -8490,13 +9254,17 @@ interface ReadableStream<R = any> {
   ): AsyncIterableIterator<R>;
 }
 
-/** @category Streams */
+/** The constructor object for {@linkcode ReadableStream}, used to create a
+ * readable stream from an underlying source describing how data is enqueued and
+ * consumed.
+ *
+ * @category Streams */
 declare var ReadableStream: {
   readonly prototype: ReadableStream;
   new (
     underlyingSource: UnderlyingByteSource,
     strategy?: { highWaterMark?: number },
-  ): ReadableStream<Uint8Array>;
+  ): ReadableStream<Uint8Array<ArrayBuffer>>;
   new <R = any>(
     underlyingSource: UnderlyingDefaultSource<R>,
     strategy?: QueuingStrategy<R>,
@@ -8565,7 +9333,11 @@ interface WritableStream<W = any> {
   getWriter(): WritableStreamDefaultWriter<W>;
 }
 
-/** @category Streams */
+/** The constructor object for {@linkcode WritableStream}, used to create a
+ * writable stream from an underlying sink describing how written chunks are
+ * handled.
+ *
+ * @category Streams */
 declare var WritableStream: {
   readonly prototype: WritableStream;
   new <W = any>(
@@ -8586,7 +9358,13 @@ interface WritableStreamDefaultController {
   error(e?: any): void;
 }
 
-/** @category Streams */
+/** The constructor object for {@linkcode WritableStreamDefaultController}.
+ *
+ * Instances are passed to a {@linkcode WritableStream}'s underlying sink
+ * callbacks rather than constructed directly, so calling the constructor
+ * throws.
+ *
+ * @category Streams */
 declare var WritableStreamDefaultController: {
   readonly prototype: WritableStreamDefaultController;
   new (): never;
@@ -8600,16 +9378,20 @@ declare var WritableStreamDefaultController: {
  * @category Streams
  */
 interface WritableStreamDefaultWriter<W = any> {
-  readonly closed: Promise<undefined>;
+  readonly closed: Promise<void>;
   readonly desiredSize: number | null;
-  readonly ready: Promise<undefined>;
+  readonly ready: Promise<void>;
   abort(reason?: any): Promise<void>;
   close(): Promise<void>;
   releaseLock(): void;
   write(chunk?: W): Promise<void>;
 }
 
-/** @category Streams */
+/** The constructor object for {@linkcode WritableStreamDefaultWriter}, used to
+ * create a writer locked to the given {@linkcode WritableStream}. Most code
+ * obtains one via {@linkcode WritableStream.getWriter} instead.
+ *
+ * @category Streams */
 declare var WritableStreamDefaultWriter: {
   readonly prototype: WritableStreamDefaultWriter;
   new <W = any>(stream: WritableStream<W>): WritableStreamDefaultWriter<W>;
@@ -8621,7 +9403,11 @@ interface TransformStream<I = any, O = any> {
   readonly writable: WritableStream<I>;
 }
 
-/** @category Streams */
+/** The constructor object for {@linkcode TransformStream}, used to create a
+ * transform stream from a transformer describing how chunks read from its
+ * writable side are transformed before appearing on its readable side.
+ *
+ * @category Streams */
 declare var TransformStream: {
   readonly prototype: TransformStream;
   new <I = any, O = any>(
@@ -8639,7 +9425,12 @@ interface TransformStreamDefaultController<O = any> {
   terminate(): void;
 }
 
-/** @category Streams */
+/** The constructor object for {@linkcode TransformStreamDefaultController}.
+ *
+ * Instances are passed to a {@linkcode TransformStream}'s transformer callbacks
+ * rather than constructed directly, so calling the constructor throws.
+ *
+ * @category Streams */
 declare var TransformStreamDefaultController: {
   readonly prototype: TransformStreamDefaultController;
   new (): never;
@@ -8728,17 +9519,61 @@ interface MessageEvent<T = any> extends Event {
   ): void;
 }
 
-/** @category Events */
+/** The constructor object for {@linkcode MessageEvent}, used to construct an
+ * event carrying a message, such as those dispatched for `BroadcastChannel`,
+ * `MessagePort`, and `Worker` messaging.
+ *
+ * @category Events */
 declare var MessageEvent: {
   readonly prototype: MessageEvent;
   new <T>(type: string, eventInitDict?: MessageEventInit<T>): MessageEvent<T>;
 };
 
 /** @category Events */
-type Transferable = MessagePort | ArrayBuffer;
+type Transferable =
+  | MessagePort
+  | ArrayBuffer
+  | ReadableStream
+  | WritableStream
+  | TransformStream;
 
-/** @category Platform */
+/**
+ * Options that control structured serialization operations such as
+ * `structuredClone(value, options)` and `MessagePort.postMessage(message, options)`.
+ *
+ * The optional `transfer` array lists {@link Transferable} objects whose
+ * underlying resources should be moved (transferred) to the receiving side
+ * instead of being cloned. After a successful transfer:
+ *
+ * - For an `ArrayBuffer`, the original buffer becomes neutered (its
+ *   `byteLength` is set to `0`).
+ * - For a `MessagePort`, the port becomes unusable on the sending side and
+ *   future events will arrive only on the transferred port at the receiver.
+ *
+ * Validation rules:
+ * - Each transferable may appear only once in the `transfer` list.
+ * - A `MessagePort` cannot be listed together with its counterpart port from
+ *   the same `MessageChannel` in the same transfer operation.
+ * - Duplicate or otherwise invalid entries will cause a `DataCloneError`
+ *   `DOMException` to be thrown.
+ *
+ * Transferring improves performance for large binary data and allows moving
+ * communication endpoints without copying.
+ *
+ * @example
+ * ```ts
+ * // Transferring an ArrayBuffer (zero-copy for large data)
+ * const buffer = new ArrayBuffer(16);
+ * const cloned = structuredClone(buffer, { transfer: [buffer] });
+ *
+ * // After transfer, the original buffer is neutered
+ * console.log(buffer.byteLength); // 0
+ * console.log(cloned.byteLength); // 16
+ *
+ * @category Platform
+ */
 interface StructuredSerializeOptions {
+  /** List of transferable objects whose ownership is moved instead of cloned. */
   transfer?: Transferable[];
 }
 
@@ -8876,12 +9711,12 @@ declare function structuredClone<T = any>(
  * @category Streams
  */
 interface CompressionStream extends GenericTransformStream {
-  readonly readable: ReadableStream<Uint8Array>;
+  readonly readable: ReadableStream<Uint8Array<ArrayBuffer>>;
   readonly writable: WritableStream<BufferSource>;
 }
 
 /** @category Streams */
-type CompressionFormat = "deflate" | "deflate-raw" | "gzip";
+type CompressionFormat = "deflate" | "deflate-raw" | "gzip" | "brotli";
 
 /**
  * An API for compressing a stream of data.
@@ -8923,7 +9758,7 @@ declare var CompressionStream: {
  * @category Streams
  */
 interface DecompressionStream extends GenericTransformStream {
-  readonly readable: ReadableStream<Uint8Array>;
+  readonly readable: ReadableStream<Uint8Array<ArrayBuffer>>;
   readonly writable: WritableStream<BufferSource>;
 }
 
@@ -8979,24 +9814,38 @@ declare function reportError(
 type PredefinedColorSpace = "srgb" | "display-p3";
 
 /** @category Platform */
+type ImageDataArray =
+  | Uint8ClampedArray<ArrayBuffer>
+  | Float16Array<ArrayBuffer>;
+
+/** @category Platform */
+type ImageDataPixelFormat = "rgba-unorm8" | "rgba-float16";
+
+/** @category Platform */
 interface ImageDataSettings {
   readonly colorSpace?: PredefinedColorSpace;
+  readonly pixelFormat?: ImageDataPixelFormat;
 }
 
 /** @category Platform */
 interface ImageData {
-  readonly colorSpace: PredefinedColorSpace;
-  readonly data: Uint8ClampedArray;
-  readonly height: number;
   readonly width: number;
+  readonly height: number;
+  readonly data: ImageDataArray;
+  readonly pixelFormat: ImageDataPixelFormat;
+  readonly colorSpace: PredefinedColorSpace;
 }
 
-/** @category Platform */
+/** The constructor object for {@linkcode ImageData}, used to create an object
+ * holding the raw pixel data of a rectangular image region, either zero-filled
+ * for the given dimensions or wrapping an existing pixel array.
+ *
+ * @category Platform */
 declare var ImageData: {
   readonly prototype: ImageData;
   new (sw: number, sh: number, settings?: ImageDataSettings): ImageData;
   new (
-    data: Uint8ClampedArray,
+    data: ImageDataArray,
     sw: number,
     sh?: number,
     settings?: ImageDataSettings,
@@ -9054,7 +9903,7 @@ interface WebTransport {
     WebTransportReceiveStream
   >;
   /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/WebTransport/ready) */
-  readonly ready: Promise<undefined>;
+  readonly ready: Promise<void>;
   /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/WebTransport/close) */
   close(closeInfo?: WebTransportCloseInfo): void;
   /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/WebTransport/createBidirectionalStream) */
@@ -9069,7 +9918,10 @@ interface WebTransport {
   createSendGroup(): WebTransportSendGroup;
 }
 
-/** @category Platform */
+/** The constructor object for {@linkcode WebTransport}, used to open a new
+ * WebTransport session to the server at the given `url`.
+ *
+ * @category Platform */
 declare var WebTransport: {
   prototype: WebTransport;
   new (url: string | URL, options?: WebTransportOptions): WebTransport;
@@ -9086,7 +9938,12 @@ interface WebTransportBidirectionalStream {
   readonly writable: WebTransportSendStream;
 }
 
-/** @category Platform */
+/** The constructor object for {@linkcode WebTransportBidirectionalStream}.
+ *
+ * Instances are obtained from a {@linkcode WebTransport} session rather than
+ * constructed directly.
+ *
+ * @category Platform */
 declare var WebTransportBidirectionalStream: {
   prototype: WebTransportBidirectionalStream;
   new (): WebTransportBidirectionalStream;
@@ -9113,7 +9970,12 @@ interface WebTransportDatagramDuplexStream {
   readonly writable: WebTransportSendStream;
 }
 
-/** @category Platform */
+/** The constructor object for {@linkcode WebTransportDatagramDuplexStream}.
+ *
+ * The datagram duplex stream is obtained from
+ * {@linkcode WebTransport.datagrams} rather than constructed directly.
+ *
+ * @category Platform */
 declare var WebTransportDatagramDuplexStream: {
   prototype: WebTransportDatagramDuplexStream;
   new (): WebTransportDatagramDuplexStream;
@@ -9134,7 +9996,12 @@ interface WebTransportSendStream extends WritableStream<Uint8Array> {
   getWriter(): WebTransportWriter;
 }
 
-/** @category Platform */
+/** The constructor object for {@linkcode WebTransportSendStream}.
+ *
+ * Instances are obtained from a {@linkcode WebTransport} session rather than
+ * constructed directly.
+ *
+ * @category Platform */
 declare var WebTransportSendStream: {
   prototype: WebTransportSendStream;
   new (): WebTransportSendStream;
@@ -9156,7 +10023,12 @@ interface WebTransportWriter extends WritableStreamDefaultWriter<Uint8Array> {
   atomicWrite(chunk: any): Promise<undefined>;
 }
 
-/** @category Platform */
+/** The constructor object for {@linkcode WebTransportWriter}.
+ *
+ * Instances are obtained from a {@linkcode WebTransportSendStream} rather than
+ * constructed directly.
+ *
+ * @category Platform */
 declare var WebTransportWriter: {
   prototype: WebTransportWriter;
   new (): WebTransportWriter;
@@ -9171,7 +10043,12 @@ interface WebTransportReceiveStream extends ReadableStream<Uint8Array> {
   getStats(): Promise<WebTransportReceiveStreamStats>;
 }
 
-/** @category Platform */
+/** The constructor object for {@linkcode WebTransportReceiveStream}.
+ *
+ * Instances are obtained from a {@linkcode WebTransport} session rather than
+ * constructed directly.
+ *
+ * @category Platform */
 declare var WebTransportReceiveStream: {
   prototype: WebTransportReceiveStream;
   new (): WebTransportReceiveStream;
@@ -9192,7 +10069,12 @@ interface WebTransportSendGroup {
   getStats(): Promise<WebTransportSendStreamStats>;
 }
 
-/** @category Platform */
+/** The constructor object for {@linkcode WebTransportSendGroup}.
+ *
+ * Instances are obtained from a {@linkcode WebTransport} session rather than
+ * constructed directly.
+ *
+ * @category Platform */
 declare var WebTransportSendGroup: {
   prototype: WebTransportSendGroup;
   new (): WebTransportSendGroup;
@@ -9209,7 +10091,11 @@ interface WebTransportError extends DOMException {
   readonly streamErrorCode: number | null;
 }
 
-/** @category Platform */
+/** The constructor object for {@linkcode WebTransportError}, used to construct
+ * an error describing a failure of a {@linkcode WebTransport} session or one of
+ * its streams.
+ *
+ * @category Platform */
 declare var WebTransportError: {
   prototype: WebTransportError;
   new (message?: string, options?: WebTransportErrorOptions): WebTransportError;
@@ -9221,7 +10107,834 @@ type WebTransportCongestionControl = "default" | "low-latency" | "throughput";
 /** @category Platform */
 type WebTransportErrorSource = "session" | "stream";
 
-// Copyright 2018-2025 the Deno authors. MIT license.
+/**
+ * @category Geometry Interfaces Module API
+ * @experimental
+ */
+interface DOMMatrix2DInit {
+  a?: number;
+  b?: number;
+  c?: number;
+  d?: number;
+  e?: number;
+  f?: number;
+  m11?: number;
+  m12?: number;
+  m21?: number;
+  m22?: number;
+  m41?: number;
+  m42?: number;
+}
+
+/**
+ * @category Geometry Interfaces Module API
+ * @experimental
+ */
+interface DOMMatrixInit extends DOMMatrix2DInit {
+  is2D?: boolean;
+  m13?: number;
+  m14?: number;
+  m23?: number;
+  m24?: number;
+  m31?: number;
+  m32?: number;
+  m33?: number;
+  m34?: number;
+  m43?: number;
+  m44?: number;
+}
+
+/**
+ * The **`DOMMatrix`** interface represents 4×4 matrices, suitable for 2D and 3D operations including rotation and translation. It is a mutable version of the DOMMatrixReadOnly interface. The interface is available inside web workers.
+ *
+ * [MDN](https://developer.mozilla.org/docs/Web/API/DOMMatrix)
+ *
+ * ```
+ * | m11 m21 m31 m41 |
+ * | m12 m22 m32 m42 |
+ * | m13 m23 m33 m43 |
+ * | m14 m24 m34 m44 |
+ * ```
+ *
+ * @category Geometry Interfaces Module API
+ * @experimental
+ */
+interface DOMMatrix extends DOMMatrixReadOnly {
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix#instance_properties) */
+  a: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix#instance_properties) */
+  b: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix#instance_properties) */
+  c: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix#instance_properties) */
+  d: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix#instance_properties) */
+  e: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix#instance_properties) */
+  f: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix#instance_properties) */
+  m11: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix#instance_properties) */
+  m12: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix#instance_properties) */
+  m13: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix#instance_properties) */
+  m14: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix#instance_properties) */
+  m21: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix#instance_properties) */
+  m22: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix#instance_properties) */
+  m23: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix#instance_properties) */
+  m24: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix#instance_properties) */
+  m31: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix#instance_properties) */
+  m32: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix#instance_properties) */
+  m33: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix#instance_properties) */
+  m34: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix#instance_properties) */
+  m41: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix#instance_properties) */
+  m42: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix#instance_properties) */
+  m43: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix#instance_properties) */
+  m44: number;
+  /**
+   * The **`invertSelf()`** method of the DOMMatrix interface inverts the original matrix. If the matrix cannot be inverted, the new matrix's components are all set to NaN and its is2D property is set to false.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix/invertSelf)
+   */
+  invertSelf(): DOMMatrix;
+  /**
+   * The **`multiplySelf()`** method of the DOMMatrix interface multiplies a matrix by the otherMatrix parameter, computing the dot product of the original matrix and the specified matrix: A⋅B. If no matrix is specified as the multiplier, the matrix is multiplied by a matrix in which every element is 0 except the bottom-right corner and the element immediately above and to its left: m33 and m34. These have the default value of 1.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix/multiplySelf)
+   */
+  multiplySelf(other?: DOMMatrixInit): DOMMatrix;
+  /**
+   * The **`preMultiplySelf()`** method of the DOMMatrix interface modifies the matrix by pre-multiplying it with the specified DOMMatrix. This is equivalent to the dot product B⋅A, where matrix A is the source matrix and B is the matrix given as an input to the method. If no matrix is specified as the multiplier, the matrix is multiplied by a matrix in which every element is 0 except the bottom-right corner and the element immediately above and to its left: m33 and m34. These have the default value of 1.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix/preMultiplySelf)
+   */
+  preMultiplySelf(other?: DOMMatrixInit): DOMMatrix;
+  /**
+   * The **`rotateAxisAngleSelf()`** method of the DOMMatrix interface is a transformation method that rotates the source matrix by the given vector and angle, returning the altered matrix.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix/rotateAxisAngleSelf)
+   */
+  rotateAxisAngleSelf(
+    x?: number,
+    y?: number,
+    z?: number,
+    angle?: number,
+  ): DOMMatrix;
+  /**
+   * The **`rotateFromVectorSelf()`** method of the DOMMatrix interface is a mutable transformation method that modifies a matrix by rotating the matrix by the angle between the specified vector and (1, 0). The rotation angle is determined by the angle between the vector (1,0)T and (x,y)T in the clockwise direction, or (+/-)arctan(y/x). If x and y are both 0, the angle is specified as 0, and the matrix is not altered.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix/rotateFromVectorSelf)
+   */
+  rotateFromVectorSelf(x?: number, y?: number): DOMMatrix;
+  /**
+   * The **`rotateSelf()`** method of the DOMMatrix interface is a mutable transformation method that modifies a matrix. It rotates the source matrix around each of its axes by the specified number of degrees and returns the rotated matrix.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix/rotateSelf)
+   */
+  rotateSelf(rotX?: number, rotY?: number, rotZ?: number): DOMMatrix;
+  /**
+   * The **`scale3dSelf()`** method of the DOMMatrix interface is a mutable transformation method that modifies a matrix by applying a specified scaling factor to all three axes, centered on the given origin, with a default origin of (0, 0, 0), returning the 3D-scaled matrix.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix/scale3dSelf)
+   */
+  scale3dSelf(
+    scale?: number,
+    originX?: number,
+    originY?: number,
+    originZ?: number,
+  ): DOMMatrix;
+  /**
+   * The **`scaleSelf()`** method of the DOMMatrix interface is a mutable transformation method that modifies a matrix by applying a specified scaling factor, centered on the given origin, with a default origin of (0, 0), returning the scaled matrix.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix/scaleSelf)
+   */
+  scaleSelf(
+    scaleX?: number,
+    scaleY?: number,
+    scaleZ?: number,
+    originX?: number,
+    originY?: number,
+    originZ?: number,
+  ): DOMMatrix;
+  /**
+   * The **`setMatrixValue()`** method of the DOMMatrix interface replaces the contents of the matrix with the matrix described by the specified transform or transforms, returning itself.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix/setMatrixValue)
+   */
+  setMatrixValue(transformList: string): DOMMatrix;
+  /**
+   * The **`skewXSelf()`** method of the DOMMatrix interface is a mutable transformation method that modifies a matrix. It skews the source matrix by applying the specified skew transformation along the X-axis and returns the skewed matrix.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix/skewXSelf)
+   */
+  skewXSelf(sx?: number): DOMMatrix;
+  /**
+   * The **`skewYSelf()`** method of the DOMMatrix interface is a mutable transformation method that modifies a matrix. It skews the source matrix by applying the specified skew transformation along the Y-axis and returns the skewed matrix.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix/skewYSelf)
+   */
+  skewYSelf(sy?: number): DOMMatrix;
+  /**
+   * The **`translateSelf()`** method of the DOMMatrix interface is a mutable transformation method that modifies a matrix. It applies the specified vectors and returns the updated matrix. The default vector is [0, 0, 0].
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix/translateSelf)
+   */
+  translateSelf(tx?: number, ty?: number, tz?: number): DOMMatrix;
+}
+
+/**
+ * The **`DOMMatrix`** interface represents 4×4 matrices, suitable for 2D and 3D operations including rotation and translation. It is a mutable version of the DOMMatrixReadOnly interface. The interface is available inside web workers.
+ *
+ * [MDN](https://developer.mozilla.org/docs/Web/API/DOMMatrix)
+ *
+ * ```
+ * | m11 m21 m31 m41 |
+ * | m12 m22 m32 m42 |
+ * | m13 m23 m33 m43 |
+ * | m14 m24 m34 m44 |
+ * ```
+ *
+ * @category Geometry Interfaces Module API
+ * @experimental
+ */
+declare var DOMMatrix: {
+  prototype: DOMMatrix;
+  new (init?: string | number[]): DOMMatrix;
+  /**
+   * The **`fromFloat32Array()`** static method of the DOMMatrix interface creates a new DOMMatrix object given an array of single-precision (32-bit) floating-point values.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix/fromFloat32Array_static)
+   */
+  fromFloat32Array(array32: Float32Array<ArrayBuffer>): DOMMatrix;
+  /**
+   * The **`fromFloat64Array()`** static method of the DOMMatrix interface creates a new DOMMatrix object given an array of double-precision (64-bit) floating-point values.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix/fromFloat64Array_static)
+   */
+  fromFloat64Array(array64: Float64Array<ArrayBuffer>): DOMMatrix;
+  /**
+   * The **`fromMatrix()`** static method of the DOMMatrix interface creates a new DOMMatrix object given an existing matrix or an object which provides the values for its properties.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrix/fromMatrix_static)
+   */
+  fromMatrix(other?: DOMMatrixInit): DOMMatrix;
+};
+
+/**
+ * The **`DOMMatrixReadOnly`** interface represents a read-only 4×4 matrix, suitable for 2D and 3D operations. The DOMMatrix interface — which is based upon DOMMatrixReadOnly—adds mutability, allowing you to alter the matrix after creating it.
+ *
+ * [MDN](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly)
+ *
+ * ```
+ * | m11 m21 m31 m41 |
+ * | m12 m22 m32 m42 |
+ * | m13 m23 m33 m43 |
+ * | m14 m24 m34 m44 |
+ * ```
+ *
+ * @category Geometry Interfaces Module API
+ * @experimental
+ */
+interface DOMMatrixReadOnly {
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly#instance_properties) */
+  readonly a: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly#instance_properties) */
+  readonly b: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly#instance_properties) */
+  readonly c: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly#instance_properties) */
+  readonly d: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly#instance_properties) */
+  readonly e: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly#instance_properties) */
+  readonly f: number;
+  /**
+   * The readonly **`is2D`** property of the DOMMatrixReadOnly interface is a Boolean flag that is true when the matrix is 2D. The value is true if the matrix was initialized as a 2D matrix and only 2D transformation operations were applied. Otherwise, the matrix is defined in 3D, and is2D is false.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly/is2D)
+   */
+  readonly is2D: boolean;
+  /**
+   * The readonly **`isIdentity`** property of the DOMMatrixReadOnly interface is a Boolean whose value is true if the matrix is the identity matrix.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly/isIdentity)
+   */
+  readonly isIdentity: boolean;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly#instance_properties) */
+  readonly m11: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly#instance_properties) */
+  readonly m12: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly#instance_properties) */
+  readonly m13: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly#instance_properties) */
+  readonly m14: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly#instance_properties) */
+  readonly m21: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly#instance_properties) */
+  readonly m22: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly#instance_properties) */
+  readonly m23: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly#instance_properties) */
+  readonly m24: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly#instance_properties) */
+  readonly m31: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly#instance_properties) */
+  readonly m32: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly#instance_properties) */
+  readonly m33: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly#instance_properties) */
+  readonly m34: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly#instance_properties) */
+  readonly m41: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly#instance_properties) */
+  readonly m42: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly#instance_properties) */
+  readonly m43: number;
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly#instance_properties) */
+  readonly m44: number;
+  /**
+   * The **`flipX()`** method of the DOMMatrixReadOnly interface creates a new matrix being the result of the original matrix flipped about the x-axis. This is equivalent to multiplying the matrix by DOMMatrix(-1, 0, 0, 1, 0, 0). The original matrix is not modified.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly/flipX)
+   */
+  flipX(): DOMMatrix;
+  /**
+   * The **`flipY()`** method of the DOMMatrixReadOnly interface creates a new matrix being the result of the original matrix flipped about the y-axis. This is equivalent to multiplying the matrix by DOMMatrix(1, 0, 0, -1, 0, 0). The original matrix is not modified.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly/flipY)
+   */
+  flipY(): DOMMatrix;
+  /**
+   * The **`inverse()`** method of the DOMMatrixReadOnly interface creates a new matrix which is the inverse of the original matrix. If the matrix cannot be inverted, the new matrix's components are all set to NaN and its is2D property is set to false. The original matrix is not changed.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly/inverse)
+   */
+  inverse(): DOMMatrix;
+  /**
+   * The **`multiply()`** method of the DOMMatrixReadOnly interface creates and returns a new matrix which is the dot product of the matrix and the otherMatrix parameter. If otherMatrix is omitted, the matrix is multiplied by a matrix in which every element is 0 except the bottom-right corner and the element immediately above and to its left: m33 and m34. These have the default value of 1. The original matrix is not modified.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly/multiply)
+   */
+  multiply(other?: DOMMatrixInit): DOMMatrix;
+  /**
+   * The **`rotate()`** method of the DOMMatrixReadOnly interface returns a new DOMMatrix created by rotating the source matrix around each of its axes by the specified number of degrees. The original matrix is not altered.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly/rotate)
+   */
+  rotate(rotX?: number, rotY?: number, rotZ?: number): DOMMatrix;
+  /**
+   * The **`rotateAxisAngle()`** method of the DOMMatrixReadOnly interface returns a new DOMMatrix created by rotating the source matrix by the given vector and angle. The original matrix is not altered.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly/rotateAxisAngle)
+   */
+  rotateAxisAngle(
+    x?: number,
+    y?: number,
+    z?: number,
+    angle?: number,
+  ): DOMMatrix;
+  /**
+   * The **`rotateFromVector()`** method of the DOMMatrixReadOnly interface is returns a new DOMMatrix created by rotating the source matrix by the angle between the specified vector and (1, 0). The rotation angle is determined by the angle between the vector (1,0)T and (x,y)T in the clockwise direction, or (+/-)arctan(y/x). If x and y are both 0, the angle is specified as 0. The original matrix is not altered.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly/rotateFromVector)
+   */
+  rotateFromVector(x?: number, y?: number): DOMMatrix;
+  /**
+   * The **`scale()`** method of the DOMMatrixReadOnly interface creates a new matrix being the result of the original matrix with a scale transform applied.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly/scale)
+   */
+  scale(
+    scaleX?: number,
+    scaleY?: number,
+    scaleZ?: number,
+    originX?: number,
+    originY?: number,
+    originZ?: number,
+  ): DOMMatrix;
+  /**
+   * The **`scale3d()`** method of the DOMMatrixReadOnly interface creates a new matrix which is the result of a 3D scale transform being applied to the matrix. It returns a new DOMMatrix created by scaling the source 3d matrix by the given scale factor centered on the origin point specified by the origin parameters, with a default origin of (0, 0, 0). The original matrix is not modified.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly/scale3d)
+   */
+  scale3d(
+    scale?: number,
+    originX?: number,
+    originY?: number,
+    originZ?: number,
+  ): DOMMatrix;
+  /** @deprecated */
+  scaleNonUniform(scaleX?: number, scaleY?: number): DOMMatrix;
+  /**
+   * The **`skewX()`** method of the DOMMatrixReadOnly interface returns a new DOMMatrix created by applying the specified skew transformation to the source matrix along its x-axis. The original matrix is not modified.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly/skewX)
+   */
+  skewX(sx?: number): DOMMatrix;
+  /**
+   * The **`skewY()`** method of the DOMMatrixReadOnly interface returns a new DOMMatrix created by applying the specified skew transformation to the source matrix along its y-axis. The original matrix is not modified.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly/skewY)
+   */
+  skewY(sy?: number): DOMMatrix;
+  /**
+   * The **`toFloat32Array()`** method of the DOMMatrixReadOnly interface returns a new Float32Array containing all 16 elements (m11, m12, m13, m14, m21, m22, m23, m24, m31, m32, m33, m34, m41, m42, m43, m44) which comprise the matrix. The elements are stored into the array as single-precision floating-point numbers in column-major (colexographical access, or "colex") order. (In other words, down the first column from top to bottom, then the second column, and so forth.)
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly/toFloat32Array)
+   */
+  toFloat32Array(): Float32Array<ArrayBuffer>;
+  /**
+   * The **`toFloat64Array()`** method of the DOMMatrixReadOnly interface returns a new Float64Array containing all 16 elements (m11, m12, m13, m14, m21, m22, m23, m24, m31, m32, m33, m34, m41, m42, m43, m44) which comprise the matrix. The elements are stored into the array as double-precision floating-point numbers in column-major (colexographical access, or "colex") order. (In other words, down the first column from top to bottom, then the second column, and so forth.)
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly/toFloat64Array)
+   */
+  toFloat64Array(): Float64Array<ArrayBuffer>;
+  /**
+   * The **`toJSON()`** method of the DOMMatrixReadOnly interface creates and returns a JSON object. The JSON object includes the 2D matrix elements a through f, the 16 elements of the 4X4 3D matrix, m[1-4][1-4], the boolean is2D property, and the boolean isIdentity property.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly/toJSON)
+   */
+  toJSON(): any;
+  /**
+   * The **`transformPoint`** method of the DOMMatrixReadOnly interface creates a new DOMPoint object, transforming a specified point by the matrix. Neither the matrix nor the original point are altered.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly/transformPoint)
+   */
+  transformPoint(point?: DOMPointInit): DOMPoint;
+  /**
+   * The **`translate()`** method of the DOMMatrixReadOnly interface creates a new matrix being the result of the original matrix with a translation applied.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly/translate)
+   */
+  translate(tx?: number, ty?: number, tz?: number): DOMMatrix;
+  toString(): string;
+}
+
+/**
+ * The **`DOMMatrixReadOnly`** interface represents a read-only 4×4 matrix, suitable for 2D and 3D operations. The DOMMatrix interface — which is based upon DOMMatrixReadOnly—adds mutability, allowing you to alter the matrix after creating it.
+ *
+ * [MDN](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly)
+ *
+ * ```
+ * | m11 m21 m31 m41 |
+ * | m12 m22 m32 m42 |
+ * | m13 m23 m33 m43 |
+ * | m14 m24 m34 m44 |
+ * ```
+ *
+ * @category Geometry Interfaces Module API
+ * @experimental
+ */
+declare var DOMMatrixReadOnly: {
+  prototype: DOMMatrixReadOnly;
+  new (init?: string | number[]): DOMMatrixReadOnly;
+  /**
+   * The **`fromFloat32Array()`** static method of the DOMMatrixReadOnly interface creates a new DOMMatrixReadOnly object given an array of single-precision (32-bit) floating-point values.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly/fromFloat32Array_static)
+   */
+  fromFloat32Array(array32: Float32Array<ArrayBuffer>): DOMMatrixReadOnly;
+  /**
+   * The **`fromFloat64Array()`** static method of the DOMMatrixReadOnly interface creates a new DOMMatrixReadOnly object given an array of double-precision (64-bit) floating-point values.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly/fromFloat64Array_static)
+   */
+  fromFloat64Array(array64: Float64Array<ArrayBuffer>): DOMMatrixReadOnly;
+  /**
+   * The **`fromMatrix()`** static method of the DOMMatrixReadOnly interface creates a new DOMMatrixReadOnly object given an existing matrix or an object which provides the values for its properties.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMMatrixReadOnly/fromMatrix_static)
+   */
+  fromMatrix(other?: DOMMatrixInit): DOMMatrixReadOnly;
+};
+
+/**
+ * @category Geometry Interfaces Module API
+ * @experimental
+ */
+interface DOMPointInit {
+  w?: number;
+  x?: number;
+  y?: number;
+  z?: number;
+}
+
+/**
+ * A **`DOMPoint`** object represents a 2D or 3D point in a coordinate system; it includes values for the coordinates in up to three dimensions, as well as an optional perspective value. DOMPoint is based on DOMPointReadOnly but allows its properties' values to be changed.
+ *
+ * [MDN](https://developer.mozilla.org/docs/Web/API/DOMPoint)
+ *
+ * @category Geometry Interfaces Module API
+ * @experimental
+ */
+interface DOMPoint extends DOMPointReadOnly {
+  /**
+   * The DOMPoint interface's **`w`** property holds the point's perspective value, w, for a point in space.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMPoint/w)
+   */
+  w: number;
+  /**
+   * The DOMPoint interface's **`x`** property holds the horizontal coordinate, x, for a point in space.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMPoint/x)
+   */
+  x: number;
+  /**
+   * The DOMPoint interface's **`y`** property holds the vertical coordinate, y, for a point in space.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMPoint/y)
+   */
+  y: number;
+  /**
+   * The DOMPoint interface's **`z`** property specifies the depth coordinate of a point in space.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMPoint/z)
+   */
+  z: number;
+}
+
+/**
+ * A **`DOMPoint`** object represents a 2D or 3D point in a coordinate system; it includes values for the coordinates in up to three dimensions, as well as an optional perspective value. DOMPoint is based on DOMPointReadOnly but allows its properties' values to be changed.
+ *
+ * [MDN](https://developer.mozilla.org/docs/Web/API/DOMPoint)
+ *
+ * @category Geometry Interfaces Module API
+ * @experimental
+ */
+declare var DOMPoint: {
+  prototype: DOMPoint;
+  new (x?: number, y?: number, z?: number, w?: number): DOMPoint;
+  /**
+   * The **`fromPoint()`** static method of the DOMPoint interface creates and returns a new mutable DOMPoint object given a source point.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMPoint/fromPoint_static)
+   */
+  fromPoint(other?: DOMPointInit): DOMPoint;
+};
+
+/**
+ * The **`DOMPointReadOnly`** interface specifies the coordinate and perspective fields used by DOMPoint to define a 2D or 3D point in a coordinate system.
+ *
+ * [MDN](https://developer.mozilla.org/docs/Web/API/DOMPointReadOnly)
+ *
+ * @category Geometry Interfaces Module API
+ * @experimental
+ */
+interface DOMPointReadOnly {
+  /**
+   * The DOMPointReadOnly interface's **`w`** property holds the point's perspective value, w, for a read-only point in space.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMPointReadOnly/w)
+   */
+  readonly w: number;
+  /**
+   * The DOMPointReadOnly interface's **`x`** property holds the horizontal coordinate, x, for a read-only point in space. This property cannot be changed by JavaScript code in this read-only version of the DOMPoint object.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMPointReadOnly/x)
+   */
+  readonly x: number;
+  /**
+   * The DOMPointReadOnl**`y`** interface's y property holds the vertical coordinate, y, for a read-only point in space.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMPointReadOnly/y)
+   */
+  readonly y: number;
+  /**
+   * The DOMPointReadOnly interface's **`z`** property holds the depth coordinate, z, for a read-only point in space.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMPointReadOnly/z)
+   */
+  readonly z: number;
+  /**
+   * The **`matrixTransform()`** method of the DOMPointReadOnly interface applies a matrix transform specified as an object to the DOMPointReadOnly object, creating and returning a new DOMPointReadOnly object. Neither the matrix nor the point are altered.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMPointReadOnly/matrixTransform)
+   */
+  matrixTransform(matrix?: DOMMatrixInit): DOMPoint;
+  /**
+   * The DOMPointReadOnly method **`toJSON()`** returns an object giving the JSON form of the point object.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMPointReadOnly/toJSON)
+   */
+  toJSON(): any;
+}
+
+/**
+ * The **`DOMPointReadOnly`** interface specifies the coordinate and perspective fields used by DOMPoint to define a 2D or 3D point in a coordinate system.
+ *
+ * [MDN](https://developer.mozilla.org/docs/Web/API/DOMPointReadOnly)
+ *
+ * @category Geometry Interfaces Module API
+ * @experimental
+ */
+declare var DOMPointReadOnly: {
+  prototype: DOMPointReadOnly;
+  new (x?: number, y?: number, z?: number, w?: number): DOMPointReadOnly;
+  /**
+   * The static DOMPointReadOnly method **`fromPoint()`** creates and returns a new DOMPointReadOnly object given a source point.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMPointReadOnly/fromPoint_static)
+   */
+  fromPoint(other?: DOMPointInit): DOMPointReadOnly;
+};
+
+/**
+ * @category Geometry Interfaces Module API
+ * @experimental
+ */
+interface DOMQuadInit {
+  p1?: DOMPointInit;
+  p2?: DOMPointInit;
+  p3?: DOMPointInit;
+  p4?: DOMPointInit;
+}
+
+/**
+ * A **`DOMQuad`** is a collection of four DOMPoints defining the corners of an arbitrary quadrilateral. Returning DOMQuads lets getBoxQuads() return accurate information even when arbitrary 2D or 3D transforms are present. It has a handy bounds attribute returning a DOMRectReadOnly for those cases where you just want an axis-aligned bounding rectangle.
+ *
+ * [MDN](https://developer.mozilla.org/docs/Web/API/DOMQuad)
+ *
+ * @category Geometry Interfaces Module API
+ * @experimental
+ */
+interface DOMQuad {
+  /**
+   * The DOMQuad interface's **`p1`** property holds the DOMPoint object that represents one of the four corners of the DOMQuad. When created from DOMQuad.fromRect(), it is the point (x, y).
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMQuad/p1)
+   */
+  readonly p1: DOMPoint;
+  /**
+   * The DOMQuad interface's **`p2`** property holds the DOMPoint object that represents one of the four corners of the DOMQuad. When created from DOMQuad.fromRect(), it is the point (x + width, y).
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMQuad/p2)
+   */
+  readonly p2: DOMPoint;
+  /**
+   * The DOMQuad interface's **`p3`** property holds the DOMPoint object that represents one of the four corners of the DOMQuad. When created from DOMQuad.fromRect(), it is the point (x + width, y + height).
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMQuad/p3)
+   */
+  readonly p3: DOMPoint;
+  /**
+   * The DOMQuad interface's **`p4`** property holds the DOMPoint object that represents one of the four corners of the DOMQuad. When created from DOMQuad.fromRect(), it is the point (x, y + height).
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMQuad/p4)
+   */
+  readonly p4: DOMPoint;
+  /**
+   * The DOMQuad method **`getBounds()`** returns a DOMRect object representing the smallest rectangle that fully contains the DOMQuad object.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMQuad/getBounds)
+   */
+  getBounds(): DOMRect;
+  /**
+   * The DOMQuad method **`toJSON()`** returns a JSON representation of the DOMQuad object.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMQuad/toJSON)
+   */
+  toJSON(): any;
+}
+
+/**
+ * A **`DOMQuad`** is a collection of four DOMPoints defining the corners of an arbitrary quadrilateral. Returning DOMQuads lets getBoxQuads() return accurate information even when arbitrary 2D or 3D transforms are present. It has a handy bounds attribute returning a DOMRectReadOnly for those cases where you just want an axis-aligned bounding rectangle.
+ *
+ * [MDN](https://developer.mozilla.org/docs/Web/API/DOMQuad)
+ *
+ * @category Geometry Interfaces Module API
+ * @experimental
+ */
+declare var DOMQuad: {
+  prototype: DOMQuad;
+  new (
+    p1?: DOMPointInit,
+    p2?: DOMPointInit,
+    p3?: DOMPointInit,
+    p4?: DOMPointInit,
+  ): DOMQuad;
+  /**
+   * The **`fromQuad()`** static method of the DOMQuad interface returns a new DOMQuad object based on the provided set of coordinates in the shape of another DOMQuad object.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMQuad/fromQuad_static)
+   */
+  fromQuad(other?: DOMQuadInit): DOMQuad;
+  /**
+   * The **`fromRect()`** static method of the DOMQuad interface returns a new DOMQuad object based on the provided set of coordinates in the shape of a DOMRect object.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMQuad/fromRect_static)
+   */
+  fromRect(other?: DOMRectInit): DOMQuad;
+};
+
+/**
+ * @category Geometry Interfaces Module API
+ * @experimental
+ */
+interface DOMRectInit {
+  height?: number;
+  width?: number;
+  x?: number;
+  y?: number;
+}
+
+/**
+ * A **`DOMRect`** describes the size and position of a rectangle.
+ *
+ * [MDN](https://developer.mozilla.org/docs/Web/API/DOMRect)
+ *
+ * @category Geometry Interfaces Module API
+ * @experimental
+ */
+interface DOMRect extends DOMRectReadOnly {
+  /**
+   * The **`height`** property of the DOMRect interface represents the height of the rectangle. The value can be negative.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMRect/height)
+   */
+  height: number;
+  /**
+   * The **`width`** property of the DOMRect interface represents the width of the rectangle. The value can be negative.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMRect/width)
+   */
+  width: number;
+  /**
+   * The **`x`** property of the DOMRect interface represents the x-coordinate of the rectangle, which is the horizontal distance between the viewport's left edge and the rectangle's origin.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMRect/x)
+   */
+  x: number;
+  /**
+   * The **`y`** property of the DOMRect interface represents the y-coordinate of the rectangle, which is the vertical distance between the viewport's top edge and the rectangle's origin.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMRect/y)
+   */
+  y: number;
+}
+
+/**
+ * A **`DOMRect`** describes the size and position of a rectangle.
+ *
+ * [MDN](https://developer.mozilla.org/docs/Web/API/DOMRect)
+ *
+ * @category Geometry Interfaces Module API
+ * @experimental
+ */
+declare var DOMRect: {
+  prototype: DOMRect;
+  new (x?: number, y?: number, width?: number, height?: number): DOMRect;
+  /**
+   * The **`fromRect()`** static method of the DOMRect object creates a new DOMRect object with a given location and dimensions.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMRect/fromRect_static)
+   */
+  fromRect(other?: DOMRectInit): DOMRect;
+};
+
+/**
+ * The **`DOMRectReadOnly`** interface specifies the standard properties (also used by DOMRect) to define a rectangle whose properties are immutable.
+ *
+ * [MDN](https://developer.mozilla.org/docs/Web/API/DOMRectReadOnly)
+ *
+ * @category Geometry Interfaces Module API
+ * @experimental
+ */
+interface DOMRectReadOnly {
+  /**
+   * The **`bottom`** read-only property of the DOMRectReadOnly interface returns the bottom coordinate value of the DOMRect. (Has the same value as y + height, or y if height is negative.)
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMRectReadOnly/bottom)
+   */
+  readonly bottom: number;
+  /**
+   * The **`height`** read-only property of the DOMRectReadOnly interface represents the height of the DOMRect.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMRectReadOnly/height)
+   */
+  readonly height: number;
+  /**
+   * The **`left`** read-only property of the DOMRectReadOnly interface returns the left coordinate value of the DOMRect. (Has the same value as x, or x + width if width is negative.)
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMRectReadOnly/left)
+   */
+  readonly left: number;
+  /**
+   * The **`right`** read-only property of the DOMRectReadOnly interface returns the right coordinate value of the DOMRect. (Has the same value as x + width, or x if width is negative.)
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMRectReadOnly/right)
+   */
+  readonly right: number;
+  /**
+   * The **`top`** read-only property of the DOMRectReadOnly interface returns the top coordinate value of the DOMRect. (Has the same value as y, or y + height if height is negative.)
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMRectReadOnly/top)
+   */
+  readonly top: number;
+  /**
+   * The **`width`** read-only property of the DOMRectReadOnly interface represents the width of the DOMRect.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMRectReadOnly/width)
+   */
+  readonly width: number;
+  /**
+   * The **`x`** read-only property of the DOMRectReadOnly interface represents the x coordinate of the DOMRect's origin.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMRectReadOnly/x)
+   */
+  readonly x: number;
+  /**
+   * The **`y`** read-only property of the DOMRectReadOnly interface represents the y coordinate of the DOMRect's origin.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMRectReadOnly/y)
+   */
+  readonly y: number;
+  /**
+   * The DOMRectReadOnly method **`toJSON()`** returns a JSON representation of the DOMRectReadOnly object.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMRectReadOnly/toJSON)
+   */
+  toJSON(): any;
+}
+
+/**
+ * The **`DOMRectReadOnly`** interface specifies the standard properties (also used by DOMRect) to define a rectangle whose properties are immutable.
+ *
+ * [MDN](https://developer.mozilla.org/docs/Web/API/DOMRectReadOnly)
+ *
+ * @category Geometry Interfaces Module API
+ * @experimental
+ */
+declare var DOMRectReadOnly: {
+  prototype: DOMRectReadOnly;
+  new (
+    x?: number,
+    y?: number,
+    width?: number,
+    height?: number,
+  ): DOMRectReadOnly;
+  /**
+   * The **`fromRect()`** static method of the DOMRectReadOnly object creates a new DOMRectReadOnly object with a given location and dimensions.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/DOMRectReadOnly/fromRect_static)
+   */
+  fromRect(other?: DOMRectInit): DOMRectReadOnly;
+};
+
+// Copyright 2018-2026 the Deno authors. MIT license.
 
 // deno-lint-ignore-file no-explicit-any no-var
 
@@ -9259,7 +10972,15 @@ interface FormData extends DomIterable<string, FormDataEntryValue> {
   set(name: string, value: string | Blob, fileName?: string): void;
 }
 
-/** @category Fetch */
+/** Provides a way to construct a set of key/value pairs representing form
+ * fields and their values, which can then be sent using the {@linkcode fetch}
+ * API. It uses the same format a form would use if the encoding type were set
+ * to `"multipart/form-data"`.
+ *
+ * @see https://developer.mozilla.org/docs/Web/API/FormData
+ *
+ * @category Fetch
+ */
 declare var FormData: {
   readonly prototype: FormData;
   new (): FormData;
@@ -9268,7 +10989,7 @@ declare var FormData: {
 /** @category Fetch */
 interface Body {
   /** A simple getter used to expose a `ReadableStream` of the body contents. */
-  readonly body: ReadableStream<Uint8Array> | null;
+  readonly body: ReadableStream<Uint8Array<ArrayBuffer>> | null;
   /** Stores a `Boolean` that declares whether the body has been used in a
    * response yet.
    */
@@ -9284,7 +11005,7 @@ interface Body {
   /** Takes a `Response` stream and reads it to completion. It returns a promise
    * that resolves with a `Uint8Array`.
    */
-  bytes(): Promise<Uint8Array>;
+  bytes(): Promise<Uint8Array<ArrayBuffer>>;
   /** Takes a `Response` stream and reads it to completion. It returns a promise
    * that resolves with a `FormData` object.
    */
@@ -9297,6 +11018,9 @@ interface Body {
    * that resolves with a `USVString` (text).
    */
   text(): Promise<string>;
+  /** Takes a `Response` body stream and returns a `ReadableStream<string>`
+   * that streams the body decoded as UTF-8 text. */
+  textStream(): ReadableStream<string>;
 }
 
 /** @category Fetch */
@@ -9368,6 +11092,8 @@ type RequestCredentials = "include" | "omit" | "same-origin";
 type RequestMode = "cors" | "navigate" | "no-cors" | "same-origin";
 /** @category Fetch */
 type RequestRedirect = "error" | "follow" | "manual";
+/** @category Fetch */
+type RequestPriority = "auto" | "high" | "low";
 /** @category Fetch */
 type ReferrerPolicy =
   | ""
@@ -9451,6 +11177,11 @@ interface RequestInit {
    */
   mode?: RequestMode;
   /**
+   * A string indicating the relative priority of the request. Sets request's
+   * priority.
+   */
+  priority?: RequestPriority;
+  /**
    * A string indicating whether request follows redirects, results in an error
    * upon encountering a redirect, or returns the redirect (in an opaque
    * fashion). Sets request's redirect.
@@ -9515,7 +11246,8 @@ interface Request extends Body {
   readonly isHistoryNavigation: boolean;
   /**
    * Returns a boolean indicating whether or not request is for a reload
-   * navigation.
+   * navigation, e.g. a refresh triggered via the browser's reload control or
+   * by calling location.reload().
    */
   readonly isReloadNavigation: boolean;
   /**
@@ -9640,6 +11372,7 @@ declare function fetch(
  */
 interface EventSourceInit {
   withCredentials?: boolean;
+  headers?: HeadersInit;
 }
 
 /**
@@ -9651,7 +11384,11 @@ interface EventSourceEventMap {
   "open": Event;
 }
 
-/**
+/** Represents a connection to a server that sends
+ * [server-sent events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events),
+ * receiving updates pushed by the server as a stream of `message` events over a
+ * persistent HTTP connection that automatically reconnects when interrupted.
+ *
  * @category Fetch
  */
 interface EventSource extends EventTarget {
@@ -9709,7 +11446,13 @@ interface EventSource extends EventTarget {
   ): void;
 }
 
-/**
+/** The `EventSource` interface is a web content's interface to server-sent
+ * events. An `EventSource` instance opens a persistent connection to an HTTP
+ * server, which sends events in `text/event-stream` format. The connection
+ * remains open until closed by calling {@linkcode EventSource.close}.
+ *
+ * @see https://developer.mozilla.org/docs/Web/API/EventSource
+ *
  * @category Fetch
  */
 declare var EventSource: {
@@ -9720,7 +11463,7 @@ declare var EventSource: {
   readonly CLOSED: 2;
 };
 
-// Copyright 2018-2025 the Deno authors. MIT license.
+// Copyright 2018-2026 the Deno authors. MIT license.
 
 // deno-lint-ignore-file no-explicit-any no-empty-interface
 
@@ -9745,7 +11488,7 @@ declare class GPUSupportedLimits {
   readonly maxTextureArrayLayers: number;
   readonly maxBindGroups: number;
   // TODO(@crowlKats): support max_bind_groups_plus_vertex_buffers
-  readonly maxBindGroupsPlusVertexBuffers?: number;
+  readonly maxBindGroupsPlusVertexBuffers: number;
   readonly maxBindingsPerBindGroup: number;
   readonly maxDynamicUniformBuffersPerPipelineLayout: number;
   readonly maxDynamicStorageBuffersPerPipelineLayout: number;
@@ -9763,7 +11506,7 @@ declare class GPUSupportedLimits {
   readonly maxVertexAttributes: number;
   readonly maxVertexBufferArrayStride: number;
   // TODO(@crowlKats): support max_inter_stage_shader_variables
-  readonly maxInterStageShaderVariables?: number;
+  readonly maxInterStageShaderVariables: number;
   readonly maxColorAttachments: number;
   readonly maxColorAttachmentBytesPerSample: number;
   readonly maxComputeWorkgroupStorageSize: number;
@@ -10420,7 +12163,7 @@ type GPUStorageTextureAccess =
 
 /** @category GPU */
 interface GPUStorageTextureBindingLayout {
-  access: GPUStorageTextureAccess;
+  access?: GPUStorageTextureAccess;
   format: GPUTextureFormat;
   viewDimension?: GPUTextureViewDimension;
 }
@@ -10469,32 +12212,46 @@ interface GPUPipelineLayoutDescriptor extends GPUObjectDescriptorBase {
 type GPUCompilationMessageType = "error" | "warning" | "info";
 
 /** @category GPU */
-interface GPUCompilationMessage {
+declare class GPUCompilationMessage {
   readonly message: string;
   readonly type: GPUCompilationMessageType;
   readonly lineNum: number;
   readonly linePos: number;
+  readonly offset: number;
+  readonly length: number;
 }
 
 /** @category GPU */
-interface GPUCompilationInfo {
+declare class GPUCompilationInfo {
   readonly messages: ReadonlyArray<GPUCompilationMessage>;
 }
 
-/** @category GPU */
-declare class GPUPipelineError extends DOMException {
-  constructor(message?: string, options?: GPUPipelineErrorInit);
-
-  readonly reason: GPUPipelineErrorReason;
+/**
+ * The **`GPUPipelineError`** interface of the WebGPU API describes a pipeline failure.
+ * Available only in secure contexts.
+ *
+ * [MDN Reference](https://developer.mozilla.org/docs/Web/API/GPUPipelineError)
+ * @category GPU
+ */
+interface GPUPipelineError extends DOMException {
+  /**
+   * The **`reason`** read-only property of the GPUPipelineError interface defines the reason the pipeline creation failed in a machine-readable way.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/GPUPipelineError/reason)
+   */
+  readonly reason: "validation" | "internal";
 }
+
+/** @category GPU */
+declare var GPUPipelineError: {
+  prototype: GPUPipelineError;
+  new (message: string, options: GPUPipelineErrorInit): GPUPipelineError;
+};
 
 /** @category GPU */
 interface GPUPipelineErrorInit {
-  reason: GPUPipelineErrorReason;
+  reason: "validation" | "internal";
 }
-
-/** @category GPU */
-type GPUPipelineErrorReason = "validation" | "internal";
 
 /**
  * Represents a compiled shader module that can be used to create graphics or compute pipelines.
@@ -11306,25 +13063,55 @@ interface GPUDeviceLostInfo {
   readonly message: string;
 }
 
-/** @category GPU */
-declare class GPUError {
+/**
+ * The **`GPUError`** interface of the WebGPU API is the base interface for errors surfaced by GPUDevice.popErrorScope and the GPUDevice.uncapturederror_event event.
+ * Available only in secure contexts.
+ *
+ * [MDN Reference](https://developer.mozilla.org/docs/Web/API/GPUError)
+ * @category GPU
+ */
+interface GPUError {
+  /**
+   * The **`message`** read-only property of the A string.
+   * The **`message`** read-only property of the GPUError interface provides a human-readable message that explains why the error occurred.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/GPUError/message)
+   */
   readonly message: string;
 }
 
 /** @category GPU */
-declare class GPUOutOfMemoryError extends GPUError {
-  constructor(message: string);
-}
+declare var GPUError: {
+  prototype: GPUError;
+  new (): GPUError;
+};
 
 /** @category GPU */
-declare class GPUValidationError extends GPUError {
-  constructor(message: string);
-}
+interface GPUOutOfMemoryError extends GPUError {}
 
 /** @category GPU */
-declare class GPUInternalError extends GPUError {
-  constructor(message: string);
-}
+declare var GPUOutOfMemoryError: {
+  prototype: GPUOutOfMemoryError;
+  new (message?: string): GPUOutOfMemoryError;
+};
+
+/** @category GPU */
+interface GPUValidationError extends GPUError {}
+
+/** @category GPU */
+declare var GPUValidationError: {
+  prototype: GPUValidationError;
+  new (message?: string): GPUValidationError;
+};
+
+/** @category GPU */
+interface GPUInternalError extends GPUError {}
+
+/** @category GPU */
+declare var GPUInternalError: {
+  prototype: GPUInternalError;
+  new (message?: string): GPUInternalError;
+};
 
 /** @category GPU */
 type GPUErrorFilter = "out-of-memory" | "validation" | "internal";
@@ -11375,27 +13162,7 @@ interface GPUExtent3DDict {
 /** @category GPU */
 type GPUExtent3D = number[] | GPUExtent3DDict;
 
-/** @category GPU */
-type GPUCanvasAlphaMode = "opaque" | "premultiplied";
-
-/** @category GPU */
-interface GPUCanvasConfiguration {
-  device: GPUDevice;
-  format: GPUTextureFormat;
-  usage?: GPUTextureUsageFlags;
-  viewFormats?: GPUTextureFormat[];
-  colorSpace?: "srgb" | "display-p3";
-  alphaMode?: GPUCanvasAlphaMode;
-}
-
-/** @category GPU */
-interface GPUCanvasContext {
-  configure(configuration: GPUCanvasConfiguration): undefined;
-  unconfigure(): undefined;
-  getCurrentTexture(): GPUTexture;
-}
-
-// Copyright 2018-2025 the Deno authors. MIT license.
+// Copyright 2018-2026 the Deno authors. MIT license.
 
 // deno-lint-ignore-file no-explicit-any no-var
 
@@ -11664,6 +13431,13 @@ interface WebSocket extends EventTarget {
  * // Using URL object instead of string
  * const url = new URL("ws://localhost:8080/path");
  * const wsWithUrl = new WebSocket(url);
+ *
+ * // WebSocket with headers
+ * const wsWithProtocols = new WebSocket("ws://localhost:8080", {
+ *   headers: {
+ *     "Authorization": "Bearer foo",
+ *   },
+ * });
  * ```
  *
  * @see https://developer.mozilla.org/en-US/docs/Web/API/WebSocket/WebSocket
@@ -11671,12 +13445,51 @@ interface WebSocket extends EventTarget {
  */
 declare var WebSocket: {
   readonly prototype: WebSocket;
-  new (url: string | URL, protocols?: string | string[]): WebSocket;
+  new (
+    url: string | URL,
+    protocolsOrOptions?: string | string[] | WebSocketOptions,
+  ): WebSocket;
   readonly CLOSED: number;
   readonly CLOSING: number;
   readonly CONNECTING: number;
   readonly OPEN: number;
 };
+
+/**
+ * Options for a WebSocket instance.
+ * This feature is non-standard.
+ *
+ * @category WebSockets
+ */
+interface WebSocketOptions {
+  /**
+   * The sub-protocol(s) that the client would like to use, in order of preference.
+   */
+  protocols?: string | string[];
+  /**
+   * A Headers object, an object literal, or an array of two-item arrays to set handshake's headers.
+   * This feature is non-standard.
+   */
+  headers?: HeadersInit;
+  /**
+   * An `HttpClient` instance to use when creating the WebSocket connection.
+   * This is useful when you need to connect through a proxy or customize TLS settings.
+   *
+   * ```ts
+   * const client = Deno.createHttpClient({
+   *   proxy: {
+   *     transport: "unix",
+   *     path: "/path/to/socket",
+   *   },
+   * });
+   *
+   * const ws = new WebSocket("ws://localhost:8000/socket", { client });
+   * ```
+   *
+   * @experimental
+   */
+  client?: Deno.HttpClient;
+}
 
 /**
  * Specifies the type of binary data being received over a `WebSocket` connection.
@@ -11711,7 +13524,7 @@ declare var WebSocket: {
  */
 type BinaryType = "arraybuffer" | "blob";
 
-// Copyright 2018-2025 the Deno authors. MIT license.
+// Copyright 2018-2026 the Deno authors. MIT license.
 
 // deno-lint-ignore-file no-explicit-any no-var
 
@@ -11754,13 +13567,21 @@ interface Storage {
   [name: string]: any;
 }
 
-/** @category Storage */
+/** This Web Storage API interface provides access to a particular domain's
+ * session or local storage. Instances of this interface are not constructable
+ * and are accessed through the {@linkcode localStorage} and
+ * {@linkcode sessionStorage} globals.
+ *
+ * @see https://developer.mozilla.org/docs/Web/API/Storage
+ *
+ * @category Storage
+ */
 declare var Storage: {
   readonly prototype: Storage;
   new (): never;
 };
 
-// Copyright 2018-2025 the Deno authors. MIT license.
+// Copyright 2018-2026 the Deno authors. MIT license.
 
 // deno-lint-ignore-file no-var
 
@@ -11914,7 +13735,7 @@ declare function createImageBitmap(
  *   console.error("Failed to create ImageBitmap:", error);
  * }
  * ```
- * @see https://developer.mozilla.org/en-US/docs/Web/API/createImageBitmap/createImageBitmap
+ * @see https://developer.mozilla.org/en-US/docs/Web/API/Window/createImageBitmap
  */
 declare function createImageBitmap(
   image: ImageBitmapSource,
@@ -11955,14 +13776,159 @@ declare var ImageBitmap: {
   new (): ImageBitmap;
 };
 
-// Copyright 2018-2025 the Deno authors. MIT license.
+/** @category Canvas */
+type OffscreenRenderingContextId = "bitmaprenderer" | "webgpu";
+/** @category Canvas */
+type OffscreenRenderingContext = ImageBitmapRenderingContext | GPUCanvasContext;
+
+/** @category Canvas */
+interface ImageEncodeOptions {
+  quality?: number;
+  type?: string;
+}
+
+/** @category Canvas */
+type GPUCanvasAlphaMode = "opaque" | "premultiplied";
+
+/** @category Canvas */
+type GPUPresentMode =
+  | "auto-vsync"
+  | "auto-no-vsync"
+  | "fifo"
+  | "fifo-relaxed"
+  | "immediate"
+  | "mailbox";
+
+/** @category Canvas */
+interface GPUCanvasConfiguration {
+  device: GPUDevice;
+  format: GPUTextureFormat;
+  usage?: GPUTextureUsageFlags;
+  viewFormats?: GPUTextureFormat[];
+  colorSpace?: "srgb" | "display-p3";
+  alphaMode?: GPUCanvasAlphaMode;
+
+  // extended from spec
+  presentMode?: GPUPresentMode;
+}
+
+/** The rendering context that presents WebGPU-rendered images on an
+ * {@linkcode OffscreenCanvas}. Obtained from
+ * {@linkcode OffscreenCanvas.getContext} with the `"webgpu"` context id.
+ *
+ * @category Canvas */
+interface GPUCanvasContext {
+  /** The canvas that this context is bound to. */
+  readonly canvas: OffscreenCanvas;
+
+  configure(configuration: GPUCanvasConfiguration): undefined;
+  getConfiguration(): GPUCanvasConfiguration | null;
+  unconfigure(): undefined;
+  getCurrentTexture(): GPUTexture;
+}
+/** The constructor object for {@linkcode GPUCanvasContext}.
+ *
+ * A `GPUCanvasContext` is obtained from
+ * {@linkcode OffscreenCanvas.getContext} with the `"webgpu"` context id rather
+ * than constructed directly.
+ *
+ * @category Canvas */
+declare var GPUCanvasContext: {
+  prototype: GPUCanvasContext;
+};
+
+/** A rendering context that displays the contents of an {@linkcode ImageBitmap}
+ * on an {@linkcode OffscreenCanvas}. Obtained from
+ * {@linkcode OffscreenCanvas.getContext} with the `"bitmaprenderer"` context
+ * id.
+ *
+ * @category Canvas */
+interface ImageBitmapRenderingContext {
+  /** The canvas that this context is bound to. */
+  readonly canvas: OffscreenCanvas;
+
+  transferFromImageBitmap(bitmap: ImageBitmap | null): undefined;
+}
+/** The constructor object for {@linkcode ImageBitmapRenderingContext}.
+ *
+ * An `ImageBitmapRenderingContext` is obtained from
+ * {@linkcode OffscreenCanvas.getContext} with the `"bitmaprenderer"` context id
+ * rather than constructed directly.
+ *
+ * @category Canvas */
+declare var ImageBitmapRenderingContext: {
+  prototype: ImageBitmapRenderingContext;
+};
+
+/** A canvas that can be rendered to off the main thread and without being
+ * attached to the DOM. It exposes drawing contexts via
+ * {@linkcode OffscreenCanvas.getContext} and can produce a {@linkcode Blob} or
+ * {@linkcode ImageBitmap} from its contents.
+ *
+ * @category Canvas
+ * @see https://developer.mozilla.org/en-US/docs/Web/API/OffscreenCanvas
+ */
+interface OffscreenCanvas extends EventTarget {
+  /** The height of the canvas. */
+  height: number;
+  /** The width of the canvas. */
+  width: number;
+
+  /** Create a Blob object representing the image contained in the canvas. */
+  convertToBlob(options?: ImageEncodeOptions): Promise<Blob>;
+
+  /**
+   * Get a drawing context for the canvas.
+   * If this was previously called, it will return the same context.
+   */
+  getContext(
+    contextId: "bitmaprenderer",
+    options?: any,
+  ): ImageBitmapRenderingContext | null;
+  getContext(contextId: "webgpu", options?: any): GPUCanvasContext | null;
+  getContext(
+    contextId: OffscreenRenderingContextId,
+    options?: any,
+  ): OffscreenRenderingContext | null;
+  // Spec also defines "2d", "webgl", and "webgl2" context ids; Deno does
+  // not implement those and getContext returns null for them.
+  getContext(
+    contextId: "2d" | "webgl" | "webgl2",
+    options?: any,
+  ): null;
+
+  /**
+   * Create an ImageBitmap object representing the image contained in the canvas.
+   */
+  transferToImageBitmap(): ImageBitmap;
+}
+
+/** The constructor object for {@linkcode OffscreenCanvas}, used to create a new
+ * offscreen canvas with the given `width` and `height` that can be rendered to
+ * without being attached to the DOM.
+ *
+ * @category Canvas
+ * @see https://developer.mozilla.org/en-US/docs/Web/API/OffscreenCanvas
+ */
+declare var OffscreenCanvas: {
+  prototype: OffscreenCanvas;
+  new (width: number, height: number): OffscreenCanvas;
+};
+
+// Copyright 2018-2026 the Deno authors. MIT license.
 
 // deno-lint-ignore-file no-var
 
 /// <reference no-default-lib="true" />
 /// <reference lib="esnext" />
 
-/** @category Crypto */
+/** The global instance of {@linkcode Crypto} that provides access to the Web
+ * Crypto API, including cryptographically secure random number generation via
+ * {@linkcode Crypto.getRandomValues}, random UUID generation via
+ * {@linkcode Crypto.randomUUID}, and the low-level primitives exposed by
+ * {@linkcode SubtleCrypto} through {@linkcode Crypto.subtle}.
+ *
+ * @category Crypto */
 declare var crypto: Crypto;
 
 /** @category Crypto */
@@ -11992,9 +13958,19 @@ type KeyUsage =
   | "verify"
   | "wrapKey";
 /** @category Crypto */
-type KeyFormat = "jwk" | "pkcs8" | "raw" | "spki";
+type KeyFormat =
+  | "jwk"
+  | "pkcs8"
+  | "raw"
+  | "raw-secret"
+  | "raw-public"
+  | "raw-private"
+  | "raw-seed"
+  | "spki";
 /** @category Crypto */
 type NamedCurve = string;
+/** @category Crypto */
+type BigInteger = Uint8Array<ArrayBuffer>;
 
 /** @category Crypto */
 interface RsaOtherPrimesInfo {
@@ -12078,7 +14054,7 @@ interface RsaHashedKeyGenParams extends RsaKeyGenParams {
 /** @category Crypto */
 interface RsaKeyGenParams extends Algorithm {
   modulusLength: number;
-  publicExponent: Uint8Array;
+  publicExponent: BigInteger;
 }
 
 /** @category Crypto */
@@ -12088,7 +14064,7 @@ interface RsaPssParams extends Algorithm {
 
 /** @category Crypto */
 interface RsaOaepParams extends Algorithm {
-  label?: Uint8Array;
+  label?: BufferSource;
 }
 
 /** @category Crypto */
@@ -12116,7 +14092,7 @@ interface RsaHashedKeyAlgorithm extends RsaKeyAlgorithm {
 /** @category Crypto */
 interface RsaKeyAlgorithm extends KeyAlgorithm {
   modulusLength: number;
-  publicExponent: Uint8Array;
+  publicExponent: BigInteger;
 }
 
 /** @category Crypto */
@@ -12165,7 +14141,13 @@ interface CryptoKey {
   readonly usages: KeyUsage[];
 }
 
-/** @category Crypto */
+/** The constructor object for {@linkcode CryptoKey}.
+ *
+ * `CryptoKey` instances cannot be created directly; they are produced by
+ * {@linkcode SubtleCrypto} methods such as `generateKey`, `importKey`, and
+ * `deriveKey`, so calling the constructor throws.
+ *
+ * @category Crypto */
 declare var CryptoKey: {
   readonly prototype: CryptoKey;
   new (): never;
@@ -12181,7 +14163,13 @@ interface CryptoKeyPair {
   publicKey: CryptoKey;
 }
 
-/** @category Crypto */
+/** The constructor object for {@linkcode CryptoKeyPair}.
+ *
+ * `CryptoKeyPair` objects are returned by {@linkcode SubtleCrypto.generateKey}
+ * for asymmetric algorithms and cannot be constructed directly, so calling the
+ * constructor throws.
+ *
+ * @category Crypto */
 declare var CryptoKeyPair: {
   readonly prototype: CryptoKeyPair;
   new (): never;
@@ -12580,13 +14568,60 @@ interface SubtleCrypto {
   ): Promise<CryptoKey>;
 }
 
-/** @category Crypto */
+/** The constructor object for {@linkcode SubtleCrypto}.
+ *
+ * The `SubtleCrypto` instance is accessed via {@linkcode Crypto.subtle}
+ * (`crypto.subtle`) rather than constructed directly, so calling the
+ * constructor throws.
+ *
+ * @category Crypto */
 declare var SubtleCrypto: {
   readonly prototype: SubtleCrypto;
   new (): never;
+  /**
+   * Synchronous feature detection for Web Crypto algorithm/operation
+   * combinations, per the WICG "Modern Algorithms in the Web Crypto API"
+   * proposal. Returns `true` when this runtime implements the requested
+   * combination, `false` otherwise.
+   *
+   * The third argument is interpreted as the derived-bit length when it is
+   * a number (relevant for `"deriveBits"`), and as a related algorithm —
+   * e.g. the derived-key algorithm for `"deriveKey"`, the wrapped/unwrapped
+   * key algorithm for `"wrapKey"` / `"unwrapKey"`, or the shared-key
+   * algorithm for `"encapsulateKey"` / `"decapsulateKey"` — otherwise.
+   *
+   * @see https://wicg.github.io/webcrypto-modern-algos/#dom-subtlecrypto-supports
+   */
+  supports(
+    operation:
+      | "encrypt"
+      | "decrypt"
+      | "sign"
+      | "verify"
+      | "digest"
+      | "generateKey"
+      | "deriveKey"
+      | "deriveBits"
+      | "importKey"
+      | "exportKey"
+      | "wrapKey"
+      | "unwrapKey"
+      | "encapsulateKey"
+      | "encapsulateBits"
+      | "decapsulateKey"
+      | "decapsulateBits"
+      | "getPublicKey",
+    algorithm: string | object,
+    lengthOrHash?: number | string | object | null,
+  ): boolean;
 };
 
-/** @category Crypto */
+/** This Web Crypto API interface provides basic cryptographic functionality.
+ * It is accessed via the global {@linkcode crypto} property, which gives access
+ * to cryptographically strong random number generation and to the low-level
+ * primitives exposed by {@linkcode SubtleCrypto} through {@linkcode Crypto.subtle}.
+ *
+ * @category Crypto */
 interface Crypto {
   readonly subtle: SubtleCrypto;
 
@@ -12606,20 +14641,7 @@ interface Crypto {
    *
    * @see https://developer.mozilla.org/en-US/docs/Web/API/Crypto/getRandomValues
    */
-  getRandomValues<
-    T extends
-      | Int8Array
-      | Int16Array
-      | Int32Array
-      | Uint8Array
-      | Uint16Array
-      | Uint32Array
-      | Uint8ClampedArray
-      | BigInt64Array
-      | BigUint64Array,
-  >(
-    array: T,
-  ): T;
+  getRandomValues<T extends ArrayBufferView>(array: T): T;
 
   /**
    * Generates a random RFC 4122 version 4 UUID using a cryptographically
@@ -12654,13 +14676,18 @@ interface Crypto {
   randomUUID(): `${string}-${string}-${string}-${string}-${string}`;
 }
 
-/** @category Crypto */
+/** The constructor object for {@linkcode Crypto}.
+ *
+ * The `Crypto` instance is accessed via the global {@linkcode crypto} property
+ * rather than constructed directly, so calling the constructor throws.
+ *
+ * @category Crypto */
 declare var Crypto: {
   readonly prototype: Crypto;
   new (): never;
 };
 
-// Copyright 2018-2025 the Deno authors. MIT license.
+// Copyright 2018-2026 the Deno authors. MIT license.
 
 // deno-lint-ignore-file no-explicit-any no-var
 
@@ -12669,16 +14696,18 @@ declare var Crypto: {
 
 /**
  * @category Messaging
- * @experimental
  */
 interface BroadcastChannelEventMap {
   "message": MessageEvent;
   "messageerror": MessageEvent;
 }
 
-/**
+/** Represents a named channel that any
+ * {@linkcode BroadcastChannel} with the same name (across workers or isolates
+ * in the same Deno process) can use to send and receive messages, allowing
+ * one-to-many communication between execution contexts.
+ *
  * @category Messaging
- * @experimental
  */
 interface BroadcastChannel extends EventTarget {
   /**
@@ -12719,46 +14748,68 @@ interface BroadcastChannel extends EventTarget {
   ): void;
 }
 
-/**
+/** The constructor object for {@linkcode BroadcastChannel}.
+ *
+ * Construct a channel with `new BroadcastChannel(name)` to join the channel
+ * identified by `name`; messages posted on it are delivered to every other
+ * `BroadcastChannel` connected to the same name.
+ *
  * @category Messaging
- * @experimental
  */
 declare var BroadcastChannel: {
   readonly prototype: BroadcastChannel;
   new (name: string): BroadcastChannel;
 };
 
-// Copyright 2018-2025 the Deno authors. MIT license.
+// Copyright 2018-2026 the Deno authors. MIT license.
 
 /// <reference no-default-lib="true" />
 /// <reference lib="esnext" />
 /// <reference lib="esnext.disposable" />
 
 declare namespace Deno {
-  /** @category Network */
+  /** The address of a network connection or listener using an IP-based
+   * transport.
+   *
+   * @category Network */
   export interface NetAddr {
+    /** The IP-based transport protocol. */
     transport: "tcp" | "udp";
+    /** The IP address. */
     hostname: string;
+    /** The port number. */
     port: number;
   }
 
-  /** @category Network */
+  /** The address of a network connection or listener using a Unix domain
+   * socket.
+   *
+   * @category Network */
   export interface UnixAddr {
+    /** The Unix domain socket transport protocol. */
     transport: "unix" | "unixpacket";
+    /** The file system path to the socket. */
     path: string;
   }
 
-  /**
+  /** The address of a network connection or listener using the VSOCK transport
+   * for communication between a virtual machine and its host.
+   *
    * @experimental **UNSTABLE**: New API, yet to be vetted.
    * @category Network
    */
   export interface VsockAddr {
+    /** The VSOCK transport protocol. */
     transport: "vsock";
+    /** The context identifier (CID) of the peer. */
     cid: number;
+    /** The port number. */
     port: number;
   }
 
-  /** @category Network */
+  /** The address of a network connection or listener, regardless of transport.
+   *
+   * @category Network */
   export type Addr = NetAddr | UnixAddr | VsockAddr;
 
   /** A generic network listener for stream-oriented protocols.
@@ -12770,11 +14821,19 @@ declare namespace Deno {
     /** Waits for and resolves to the next connection to the `Listener`. */
     accept(): Promise<T>;
     /** Close closes the listener. Any pending accept promises will be rejected
-     * with errors. */
+     * with errors. A pending async iterator `next()` call will settle after the
+     * underlying accept promise is rejected.
+     *
+     * If the listener has a pending accept operation, the underlying socket may
+     * not be released until the pending promise is rejected. If you need to
+     * listen on the same address immediately after closing the listener, await
+     * the pending accept promise before calling {@linkcode Deno.listen} again.
+     */
     close(): void;
     /** Return the address of the `Listener`. */
     readonly addr: A;
 
+    /** Iterates over the connections accepted by the listener. */
     [Symbol.asyncIterator](): AsyncIterableIterator<T>;
 
     /**
@@ -12815,7 +14874,10 @@ declare namespace Deno {
    */
   export type VsockListener = Listener<VsockConn, VsockAddr>;
 
-  /** @category Network */
+  /** A generic stream-oriented network connection that can be read from and
+   * written to.
+   *
+   * @category Network */
   export interface Conn<A extends Addr = Addr> extends Disposable {
     /** Read the incoming data from the connection into an array buffer (`p`).
      *
@@ -12884,11 +14946,15 @@ declare namespace Deno {
     /** Make the connection not block the event loop from finishing. */
     unref(): void;
 
+    /** A {@linkcode ReadableStream} of the data received over the connection. */
     readonly readable: ReadableStream<Uint8Array<ArrayBuffer>>;
+    /** A {@linkcode WritableStream} for sending data over the connection. */
     readonly writable: WritableStream<Uint8Array<ArrayBufferLike>>;
   }
 
-  /** @category Network */
+  /** Information about a completed TLS handshake.
+   *
+   * @category Network */
   export interface TlsHandshakeInfo {
     /**
      * Contains the ALPN protocol selected during negotiation with the server.
@@ -12897,7 +14963,9 @@ declare namespace Deno {
     alpnProtocol: string | null;
   }
 
-  /** @category Network */
+  /** A TLS-encrypted stream connection over an IP-based transport.
+   *
+   * @category Network */
   export interface TlsConn extends Conn<NetAddr> {
     /** Runs the client or server handshake protocol to completion if that has
      * not happened yet. Calling this method is optional; the TLS handshake
@@ -12905,13 +14973,16 @@ declare namespace Deno {
     handshake(): Promise<TlsHandshakeInfo>;
   }
 
-  /** @category Network */
+  /** Options which can be set when opening a listener via
+   * {@linkcode Deno.listen}.
+   *
+   * @category Network */
   export interface ListenOptions {
     /** The port to listen on.
      *
      * Set to `0` to listen on any available port.
      */
-    port: number;
+    port?: number;
     /** A literal IP address or host name that can be resolved to an IP address.
      *
      * __Note about `0.0.0.0`__ While listening `0.0.0.0` works on all platforms,
@@ -12921,9 +14992,24 @@ declare namespace Deno {
      *
      * @default {"0.0.0.0"} */
     hostname?: string;
+
+    /** Maximum number of pending connections in the listen queue.
+     *
+     * This parameter controls how many incoming connections can be queued by the
+     * operating system while waiting for the application to accept them. If more
+     * connections arrive when the queue is full, they will be refused.
+     *
+     * The kernel may adjust this value (e.g., rounding up to the next power of 2
+     * plus 1). Different operating systems have different maximum limits.
+     *
+     * @default {511} */
+    tcpBacklog?: number;
   }
 
-  /** @category Network */
+  /** Options which can be set when opening a TCP listener via
+   * {@linkcode Deno.listen}.
+   *
+   * @category Network */
   export interface TcpListenOptions extends ListenOptions {
   }
 
@@ -12961,9 +15047,11 @@ declare namespace Deno {
    * const listener = Deno.listen({ path: "/foo/bar.sock", transport: "unix" })
    * ```
    *
-   * Requires `allow-read` and `allow-write` permission.
+   * Requires `allow-read`, `allow-write` and `allow-net` permission. The
+   * `allow-net` grant may be scoped to the socket path with
+   * `--allow-net=unix:<absolute-path>`.
    *
-   * @tags allow-read, allow-write
+   * @tags allow-read, allow-write, allow-net
    * @category Network
    */
   // deno-lint-ignore adjacent-overload-signatures
@@ -12979,7 +15067,10 @@ declare namespace Deno {
    * @category Network
    */
   export interface VsockListenOptions {
+    /** The context identifier (CID) to listen on. Use `-1` to listen on any
+     * CID. */
     cid: number;
+    /** The port to listen on. */
     port: number;
   }
 
@@ -13029,8 +15120,12 @@ declare namespace Deno {
     cert: string;
   }
 
-  /** @category Network */
+  /** Options which can be set when opening a TLS listener via
+   * {@linkcode Deno.listenTls}.
+   *
+   * @category Network */
   export interface ListenTlsOptions extends TcpListenOptions {
+    /** The transport layer protocol to use. */
     transport?: "tcp";
 
     /** Application-Layer Protocol Negotiation (ALPN) protocols to announce to
@@ -13060,7 +15155,9 @@ declare namespace Deno {
     options: ListenTlsOptions & TlsCertifiedKeyPem,
   ): TlsListener;
 
-  /** @category Network */
+  /** Options which can be set when connecting via {@linkcode Deno.connect}.
+   *
+   * @category Network */
   export interface ConnectOptions {
     /** The port to connect to. */
     port: number;
@@ -13073,6 +15170,22 @@ declare namespace Deno {
     transport?: "tcp";
     /** An {@linkcode AbortSignal} to close the tcp connection. */
     signal?: AbortSignal;
+    /**
+     * Enable Happy Eyeballs algorithm (RFC 8305) for automatic address family
+     * selection. When enabled, the connection will try both IPv6 and IPv4
+     * addresses with interleaving for faster connection establishment.
+     *
+     * @default {true}
+     */
+    autoSelectFamily?: boolean;
+    /**
+     * Delay in milliseconds between starting new connection attempts when
+     * using Happy Eyeballs. A new connection attempt is started every
+     * `autoSelectFamilyAttemptDelay` milliseconds until one succeeds.
+     *
+     * @default {250}
+     */
+    autoSelectFamilyAttemptDelay?: number;
   }
 
   /**
@@ -13093,25 +15206,48 @@ declare namespace Deno {
    */
   export function connect(options: ConnectOptions): Promise<TcpConn>;
 
-  /** @category Network */
+  /** A TCP stream connection.
+   *
+   * @category Network */
   export interface TcpConn extends Conn<NetAddr> {
     /**
-     * Enable/disable the use of Nagle's algorithm.
+     * Sets the `TCP_NODELAY` option on this connection, which controls whether
+     * Nagle's algorithm is used.
      *
-     * @param [noDelay=true]
+     * Note that the boolean is `noDelay`, not "enable Nagle", so the sense is
+     * the opposite of enabling the algorithm:
+     *
+     * - `setNoDelay(true)` (the default) sets `TCP_NODELAY`, which **disables**
+     *   Nagle's algorithm. Small writes are sent immediately with lower latency,
+     *   at the cost of potentially more, smaller packets.
+     * - `setNoDelay(false)` clears `TCP_NODELAY`, which **enables** Nagle's
+     *   algorithm. Small writes may be buffered and coalesced to reduce the
+     *   number of packets sent.
+     *
+     * @param [noDelay=true] When `true`, disables Nagle's algorithm.
      */
     setNoDelay(noDelay?: boolean): void;
-    /** Enable/disable keep-alive functionality. */
+    /**
+     * Enable or disable TCP keep-alive probes on this connection. Pass `true`
+     * to enable keep-alive and `false` to disable it.
+     */
     setKeepAlive(keepAlive?: boolean): void;
   }
 
-  /** @category Network */
+  /** Options which can be set when connecting to a Unix domain socket via
+   * {@linkcode Deno.connect}.
+   *
+   * @category Network */
   export interface UnixConnectOptions {
+    /** The Unix domain socket transport protocol. */
     transport: "unix";
+    /** The file system path to the socket to connect to. */
     path: string;
   }
 
-  /** @category Network */
+  /** A Unix domain socket stream connection.
+   *
+   * @category Network */
   export interface UnixConn extends Conn<UnixAddr> {}
 
   /** Connects to the hostname (default is "127.0.0.1") and port on the named
@@ -13125,7 +15261,9 @@ declare namespace Deno {
    * const conn5 = await Deno.connect({ path: "/foo/bar.sock", transport: "unix" });
    * ```
    *
-   * Requires `allow-net` permission for "tcp" and `allow-read` for "unix".
+   * Requires `allow-net` permission for "tcp", and `allow-read` and
+   * `allow-net` for "unix". The "unix" `allow-net` grant may be scoped to the
+   * socket path with `--allow-net=unix:<absolute-path>`.
    *
    * @tags allow-net, allow-read
    * @category Network
@@ -13133,17 +15271,24 @@ declare namespace Deno {
   // deno-lint-ignore adjacent-overload-signatures
   export function connect(options: UnixConnectOptions): Promise<UnixConn>;
 
-  /**
+  /** Options which can be set when connecting over VSOCK via
+   * {@linkcode Deno.connect}.
+   *
    * @experimental **UNSTABLE**: New API, yet to be vetted.
    * @category Network
    */
   export interface VsockConnectOptions {
+    /** The VSOCK transport protocol. */
     transport: "vsock";
+    /** The context identifier (CID) of the peer to connect to. */
     cid: number;
+    /** The port to connect to. */
     port: number;
   }
 
-  /** @category Network */
+  /** A VSOCK stream connection.
+   *
+   * @category Network */
   export interface VsockConn extends Conn<VsockAddr> {}
 
   /** Connects to the hostname (default is "127.0.0.1") and port on the named
@@ -13160,7 +15305,7 @@ declare namespace Deno {
    * const conn6 = await Deno.connect({ cid: -1, port: 80, transport: "vsock" });
    * ```
    *
-   * Requires `allow-net` permission for "tcp" and "vsock", and `allow-read` for "unix".
+   * Requires `allow-net` permission for "tcp" and "vsock", and `allow-read` and `allow-net` for "unix". The "unix" `allow-net` grant may be scoped to the socket path with `--allow-net=unix:<absolute-path>`.
    *
    * @tags allow-net, allow-read
    * @category Network
@@ -13168,7 +15313,10 @@ declare namespace Deno {
   // deno-lint-ignore adjacent-overload-signatures
   export function connect(options: VsockConnectOptions): Promise<VsockConn>;
 
-  /** @category Network */
+  /** Options which can be set when establishing a TLS connection via
+   * {@linkcode Deno.connectTls}.
+   *
+   * @category Network */
   export interface ConnectTlsOptions {
     /** The port to connect to. */
     port: number;
@@ -13186,6 +15334,31 @@ declare namespace Deno {
      * TLS handshake.
      */
     alpnProtocols?: string[];
+    /** If true, the certificate's common name or subject alternative names will not be
+     * checked against the hostname provided in the options.
+     *
+     * This disables hostname verification but still validates the certificate chain.
+     * Use with caution and only when connecting to known servers.
+     *
+     * @default {false}
+     */
+    unsafelyDisableHostnameVerification?: boolean;
+    /**
+     * Enable Happy Eyeballs algorithm (RFC 8305) for automatic address family
+     * selection. When enabled, the connection will try both IPv6 and IPv4
+     * addresses with interleaving for faster connection establishment.
+     *
+     * @default {true}
+     */
+    autoSelectFamily?: boolean;
+    /**
+     * Delay in milliseconds between starting new connection attempts when
+     * using Happy Eyeballs. A new connection attempt is started every
+     * `autoSelectFamilyAttemptDelay` milliseconds until one succeeds.
+     *
+     * @default {250}
+     */
+    autoSelectFamilyAttemptDelay?: number;
   }
 
   /** Establishes a secure connection over TLS (transport layer security) using
@@ -13219,7 +15392,10 @@ declare namespace Deno {
     options: ConnectTlsOptions | (ConnectTlsOptions & TlsCertifiedKeyPem),
   ): Promise<TlsConn>;
 
-  /** @category Network */
+  /** Options which can be set when upgrading an existing connection to TLS via
+   * {@linkcode Deno.startTls}.
+   *
+   * @category Network */
   export interface StartTlsOptions {
     /** A literal IP address or host name that can be resolved to an IP address.
      *
@@ -13235,6 +15411,15 @@ declare namespace Deno {
      * TLS handshake.
      */
     alpnProtocols?: string[];
+    /** If true, the certificate's common name or subject alternative names will not be
+     * checked against the hostname provided in the options.
+     *
+     * This disables hostname verification but still validates the certificate chain.
+     * Use with caution and only when connecting to known servers.
+     *
+     * @default {false}
+     */
+    unsafelyDisableHostnameVerification?: boolean;
   }
 
   /** Start TLS handshake from an existing connection using an optional list of
@@ -13487,7 +15672,7 @@ declare namespace Deno {
    * @experimental
    * @category Network
    */
-  export interface QuicListener extends AsyncIterable<QuicConn> {
+  export interface QuicListener extends AsyncIterable<QuicIncoming> {
     /** Waits for and resolves to the next incoming connection. */
     incoming(): Promise<QuicIncoming>;
 
@@ -13497,7 +15682,8 @@ declare namespace Deno {
     /** Stops the listener. This does not close the endpoint. */
     stop(): void;
 
-    [Symbol.asyncIterator](): AsyncIterableIterator<QuicConn>;
+    /** Iterates over the incoming connections received by the listener. */
+    [Symbol.asyncIterator](): AsyncIterableIterator<QuicIncoming>;
 
     /** The endpoint for this listener. */
     readonly endpoint: QuicEndpoint;
@@ -13686,7 +15872,7 @@ declare namespace Deno {
   export {}; // only export exports
 }
 
-// Copyright 2018-2025 the Deno authors. MIT license.
+// Copyright 2018-2026 the Deno authors. MIT license.
 
 // Documentation partially adapted from [MDN](https://developer.mozilla.org/),
 // by Mozilla Contributors, which is licensed under CC-BY-SA 2.5.
@@ -13702,8 +15888,19 @@ declare namespace Deno {
 /// <reference lib="deno.websocket" />
 /// <reference lib="deno.crypto" />
 /// <reference lib="deno.ns" />
+/// <reference lib="deno.broadcast_channel" />
+/// <reference lib="node" />
 
-/** @category Wasm */
+/** The `WebAssembly` JavaScript object acts as the namespace for all
+ * [WebAssembly](https://developer.mozilla.org/en-US/docs/WebAssembly)-related
+ * functionality. Unlike most global objects, it is not a constructor; it groups
+ * the functions used to compile and instantiate WebAssembly modules together
+ * with the classes (`Module`, `Instance`, `Memory`, `Table`, `Global`) and
+ * error types used to work with them.
+ *
+ * [MDN](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/WebAssembly)
+ *
+ * @category Wasm */
 declare namespace WebAssembly {
   /**
    * The `WebAssembly.CompileError` object indicates an error during WebAssembly decoding or validation.
@@ -13873,7 +16070,10 @@ declare namespace WebAssembly {
    * @category Wasm
    */
   export interface GlobalDescriptor {
+    /** Whether the global variable can be modified after creation. Defaults to
+     * `false`. */
     mutable?: boolean;
+    /** The data type of the global variable. */
     value: ValueType;
   }
 
@@ -13883,8 +16083,14 @@ declare namespace WebAssembly {
    * @category Wasm
    */
   export interface MemoryDescriptor {
+    /** The initial size of the memory, in units of WebAssembly pages (64KB
+     * each). */
     initial: number;
+    /** The maximum size the memory is allowed to grow to, in units of
+     * WebAssembly pages. */
     maximum?: number;
+    /** Whether the memory is shared between agents (backed by a
+     * `SharedArrayBuffer`). Defaults to `false`. */
     shared?: boolean;
   }
 
@@ -13894,7 +16100,9 @@ declare namespace WebAssembly {
    * @category Wasm
    */
   export interface ModuleExportDescriptor {
+    /** The kind of entity being exported. */
     kind: ImportExportKind;
+    /** The name under which the entity is exported. */
     name: string;
   }
 
@@ -13904,8 +16112,11 @@ declare namespace WebAssembly {
    * @category Wasm
    */
   export interface ModuleImportDescriptor {
+    /** The kind of entity being imported. */
     kind: ImportExportKind;
+    /** The name of the module the entity is imported from. */
     module: string;
+    /** The name of the imported entity within its module. */
     name: string;
   }
 
@@ -13915,8 +16126,11 @@ declare namespace WebAssembly {
    * @category Wasm
    */
   export interface TableDescriptor {
+    /** The type of value stored in the table. */
     element: TableKind;
+    /** The initial number of elements in the table. */
     initial: number;
+    /** The maximum number of elements the table is allowed to grow to. */
     maximum?: number;
   }
 
@@ -13925,7 +16139,7 @@ declare namespace WebAssembly {
    * @category Wasm
    */
   export interface WebAssemblyInstantiatedSource {
-    /* A `WebAssembly.Instance` object that contains all the exported WebAssembly functions. */
+    /** A `WebAssembly.Instance` object that contains all the exported WebAssembly functions. */
     instance: Instance;
 
     /**
@@ -13935,21 +16149,39 @@ declare namespace WebAssembly {
     module: Module;
   }
 
-  /** @category Wasm */
+  /** The kind of entity referenced by a module import or export descriptor.
+   *
+   * @category Wasm */
   export type ImportExportKind = "function" | "global" | "memory" | "table";
-  /** @category Wasm */
+  /** The type of value stored in a `WebAssembly.Table`.
+   *
+   * @category Wasm */
   export type TableKind = "anyfunc";
-  /** @category Wasm */
+  /** The data type of a WebAssembly value, used to describe globals.
+   *
+   * @category Wasm */
   export type ValueType = "f32" | "f64" | "i32" | "i64";
-  /** @category Wasm */
+  /** A value that can be exported from a WebAssembly module instance.
+   *
+   * @category Wasm */
   export type ExportValue = Function | Global | Memory | Table;
-  /** @category Wasm */
+  /** The set of values exported by a WebAssembly module instance, keyed by
+   * export name.
+   *
+   * @category Wasm */
   export type Exports = Record<string, ExportValue>;
-  /** @category Wasm */
+  /** A value that can be supplied to a WebAssembly module as an import.
+   *
+   * @category Wasm */
   export type ImportValue = ExportValue | number;
-  /** @category Wasm */
+  /** The set of values imported from a single module, keyed by import name.
+   *
+   * @category Wasm */
   export type ModuleImports = Record<string, ImportValue>;
-  /** @category Wasm */
+  /** The import object supplied when instantiating a WebAssembly module,
+   * grouping imported values by module name.
+   *
+   * @category Wasm */
   export type Imports = Record<string, ModuleImports>;
 
   /**
@@ -14039,67 +16271,6 @@ declare namespace WebAssembly {
   export function validate(bytes: BufferSource): boolean;
 }
 
-/** Sets a timer which executes a function once after the delay (in milliseconds) elapses. Returns
- * an id which may be used to cancel the timeout.
- *
- * ```ts
- * setTimeout(() => { console.log('hello'); }, 500);
- * ```
- *
- * @category Platform
- */
-declare function setTimeout(
-  /** callback function to execute when timer expires */
-  cb: (...args: any[]) => void,
-  /** delay in ms */
-  delay?: number,
-  /** arguments passed to callback function */
-  ...args: any[]
-): number;
-
-/** Repeatedly calls a function , with a fixed time delay between each call.
- *
- * ```ts
- * // Outputs 'hello' to the console every 500ms
- * setInterval(() => { console.log('hello'); }, 500);
- * ```
- *
- * @category Platform
- */
-declare function setInterval(
-  /** callback function to execute when timer expires */
-  cb: (...args: any[]) => void,
-  /** delay in ms */
-  delay?: number,
-  /** arguments passed to callback function */
-  ...args: any[]
-): number;
-
-/** Cancels a timed, repeating action which was previously started by a call
- * to `setInterval()`
- *
- * ```ts
- * const id = setInterval(() => {console.log('hello');}, 500);
- * // ...
- * clearInterval(id);
- * ```
- *
- * @category Platform
- */
-declare function clearInterval(id?: number): void;
-
-/** Cancels a scheduled action initiated by `setTimeout()`
- *
- * ```ts
- * const id = setTimeout(() => {console.log('hello');}, 500);
- * // ...
- * clearTimeout(id);
- * ```
- *
- * @category Platform
- */
-declare function clearTimeout(id?: number): void;
-
 /** @category Platform */
 interface VoidFunction {
   (): void;
@@ -14132,20 +16303,6 @@ declare function queueMicrotask(func: VoidFunction): void;
  */
 declare function dispatchEvent(event: Event): boolean;
 
-/** @category Platform */
-interface DOMStringList {
-  /** Returns the number of strings in strings. */
-  readonly length: number;
-  /** Returns true if strings contains string, and false otherwise. */
-  contains(string: string): boolean;
-  /** Returns the string with index index from strings. */
-  item(index: number): string | null;
-  [index: number]: string;
-}
-
-/** @category Platform */
-type BufferSource = ArrayBufferView | ArrayBuffer;
-
 /**
  * A global console object that provides methods for logging, debugging, and error reporting.
  * The console object provides access to the browser's or runtime's debugging console functionality.
@@ -14165,6 +16322,101 @@ type BufferSource = ArrayBufferView | ArrayBuffer;
  */
 declare var console: Console;
 
+/**
+ * A brand and version pair describing a user agent, as returned by
+ * {@linkcode NavigatorUAData}.
+ *
+ * @category Platform
+ */
+interface NavigatorUABrandVersion {
+  readonly brand: string;
+  readonly version: string;
+}
+
+/**
+ * The values returned by {@linkcode NavigatorUAData.getHighEntropyValues}.
+ *
+ * @category Platform
+ */
+interface UADataValues {
+  readonly brands?: NavigatorUABrandVersion[];
+  readonly mobile?: boolean;
+  readonly platform?: string;
+  readonly architecture?: string;
+  readonly bitness?: string;
+  readonly formFactors?: string[];
+  readonly fullVersionList?: NavigatorUABrandVersion[];
+  readonly model?: string;
+  readonly platformVersion?: string;
+  readonly uaFullVersion?: string;
+  readonly wow64?: boolean;
+}
+
+/**
+ * The low-entropy values returned by {@linkcode NavigatorUAData.toJSON}.
+ *
+ * @category Platform
+ */
+interface UALowEntropyJSON {
+  readonly brands: NavigatorUABrandVersion[];
+  readonly mobile: boolean;
+  readonly platform: string;
+}
+
+/**
+ * Gives access to information about the runtime's user agent, exposed via
+ * {@linkcode Navigator.userAgentData}. This is the
+ * [User-Agent Client Hints API](https://developer.mozilla.org/en-US/docs/Web/API/NavigatorUAData).
+ *
+ * @category Platform
+ */
+interface NavigatorUAData {
+  /** A list of the runtime's brand and major version. */
+  readonly brands: NavigatorUABrandVersion[];
+  /** Whether the runtime reports itself as a mobile device. Always `false` in Deno. */
+  readonly mobile: boolean;
+  /** The platform the runtime is running on (e.g. `"Linux"`, `"macOS"`, `"Windows"`). */
+  readonly platform: string;
+  /**
+   * Resolves with the requested high-entropy values. Unrecognized hints are
+   * ignored. The low-entropy values (`brands`, `mobile`, `platform`) are always
+   * included.
+   */
+  getHighEntropyValues(hints: string[]): Promise<UADataValues>;
+  /** Returns a JSON representation of the low-entropy values. */
+  toJSON(): UALowEntropyJSON;
+}
+
+/**
+ * Constructor for {@linkcode NavigatorUAData} objects.
+ *
+ * Note: This constructor cannot be used to create new `NavigatorUAData`
+ * instances in Deno.
+ *
+ * @category Platform
+ */
+declare var NavigatorUAData: {
+  readonly prototype: NavigatorUAData;
+  new (): never;
+};
+
+/** @category Platform */
+interface DOMStringList {
+  /** Returns the number of strings in strings. */
+  readonly length: number;
+  /** Returns true if strings contains string, and false otherwise. */
+  contains(string: string): boolean;
+  /** Returns the string with index index from strings. */
+  item(index: number): string | null;
+  [index: number]: string;
+}
+
+/** @category Platform */
+type BufferSource = ArrayBufferView<ArrayBuffer> | ArrayBuffer;
+
+/** @category Platform */
+type AllowSharedBufferSource = ArrayBufferView | ArrayBufferLike;
+
 /** @category Events */
 interface ErrorEventInit extends EventInit {
   message?: string;
@@ -14183,7 +16435,11 @@ interface ErrorEvent extends Event {
   readonly error: any;
 }
 
-/** @category Events */
+/** The constructor object for {@linkcode ErrorEvent}, used to construct an
+ * event describing an uncaught error, such as the one dispatched on the global
+ * scope as `error`.
+ *
+ * @category Events */
 declare var ErrorEvent: {
   readonly prototype: ErrorEvent;
   new (type: string, eventInitDict?: ErrorEventInit): ErrorEvent;
@@ -14201,7 +16457,11 @@ interface PromiseRejectionEvent extends Event {
   readonly reason: any;
 }
 
-/** @category Events */
+/** The constructor object for {@linkcode PromiseRejectionEvent}, used to
+ * construct the event dispatched on the global scope as `unhandledrejection`
+ * and `rejectionhandled` when a promise is rejected without a handler.
+ *
+ * @category Events */
 declare var PromiseRejectionEvent: {
   readonly prototype: PromiseRejectionEvent;
   new (
@@ -14278,13 +16538,13 @@ interface WorkerOptions {
  */
 interface Worker extends EventTarget {
   /** Event handler for error events. Fired when an error occurs in the worker's execution context. */
-  onerror: (this: Worker, e: ErrorEvent) => any | null;
+  onerror: ((this: Worker, e: ErrorEvent) => any) | null;
 
   /** Event handler for message events. Fired when the worker sends data back to the main thread. */
-  onmessage: (this: Worker, e: MessageEvent) => any | null;
+  onmessage: ((this: Worker, e: MessageEvent) => any) | null;
 
   /** Event handler for message error events. Fired when a message cannot be deserialized. */
-  onmessageerror: (this: Worker, e: MessageEvent) => any | null;
+  onmessageerror: ((this: Worker, e: MessageEvent) => any) | null;
 
   /**
    * Sends a message to the worker, transferring ownership of the specified transferable objects.
@@ -14430,6 +16690,23 @@ interface Performance extends EventTarget {
   /** Removes stored timestamp with the associated name. */
   clearMeasures(measureName?: string): void;
 
+  /** Removes all performance entries with an entryType of "resource" from the
+   * performance timeline and sets the size of the performance resource data
+   * buffer to zero.
+   *
+   * Note: Deno does not currently track resource timings, so this method has
+   * no observable effect. It is provided for API compatibility.
+   */
+  clearResourceTimings(): void;
+
+  /** Sets the desired size of the browser's resource timing buffer which
+   * stores the "resource" performance entries.
+   *
+   * Note: Deno does not currently track resource timings, so this method has
+   * no observable effect. It is provided for API compatibility.
+   */
+  setResourceTimingBufferSize(maxSize: number): void;
+
   getEntries(): PerformanceEntryList;
   getEntriesByName(name: string, type?: string): PerformanceEntryList;
   getEntriesByType(type: string): PerformanceEntryList;
@@ -14464,13 +16741,22 @@ interface Performance extends EventTarget {
   toJSON(): any;
 }
 
-/** @category Performance */
+/** The constructor object for {@linkcode Performance}.
+ *
+ * The `Performance` instance is accessed via the global {@linkcode performance}
+ * property rather than constructed directly, so calling the constructor throws.
+ *
+ * @category Performance */
 declare var Performance: {
   readonly prototype: Performance;
   new (): never;
 };
 
-/** @category Performance */
+/** The global {@linkcode Performance} instance, providing access to
+ * high-resolution timing via `performance.now()` and the user-timing marks and
+ * measures APIs.
+ *
+ * @category Performance */
 declare var performance: Performance;
 
 /** @category Performance */
@@ -14573,6 +16859,71 @@ declare var PerformanceMeasure: {
   new (): never;
 };
 
+/** A list of {@linkcode PerformanceEntry} objects passed to a
+ * {@linkcode PerformanceObserver} callback via its `observe()` method.
+ *
+ * @category Performance
+ */
+interface PerformanceObserverEntryList {
+  /** Returns all explicitly observed performance entries. */
+  getEntries(): PerformanceEntry[];
+  /** Returns the observed performance entries with the given name. */
+  getEntriesByName(name: string, type?: string): PerformanceEntry[];
+  /** Returns the observed performance entries with the given entry type. */
+  getEntriesByType(type: string): PerformanceEntry[];
+}
+
+/** A list of {@linkcode PerformanceEntry} objects passed to a
+ * {@linkcode PerformanceObserver} callback via its `observe()` method.
+ *
+ * @category Performance
+ */
+declare var PerformanceObserverEntryList: {
+  readonly prototype: PerformanceObserverEntryList;
+  new (): never;
+};
+
+/** The callback invoked when the observed set of performance entries grows.
+ *
+ * @category Performance
+ */
+interface PerformanceObserverCallback {
+  (list: PerformanceObserverEntryList, observer: PerformanceObserver): void;
+}
+
+/** Observes performance measurement events and is notified of new
+ * {@linkcode PerformanceEntry} objects as they are recorded in the performance
+ * timeline.
+ *
+ * @category Performance
+ */
+interface PerformanceObserver {
+  /** Stops the observer from receiving any further performance entries. */
+  disconnect(): void;
+  /** Specifies the set of performance entry types to observe. */
+  observe(
+    options?: {
+      entryTypes?: string[];
+      type?: string;
+      buffered?: boolean;
+    },
+  ): void;
+  /** Returns the current list of buffered performance entries, emptying it. */
+  takeRecords(): PerformanceEntry[];
+}
+
+/** Observes performance measurement events and is notified of new
+ * {@linkcode PerformanceEntry} objects as they are recorded in the performance
+ * timeline.
+ *
+ * @category Performance
+ */
+declare var PerformanceObserver: {
+  readonly prototype: PerformanceObserver;
+  readonly supportedEntryTypes: readonly string[];
+  new (callback: PerformanceObserverCallback): PerformanceObserver;
+};
+
 /** @category Events */
 interface CustomEventInit<T = any> extends EventInit {
   detail?: T;
@@ -14585,7 +16936,11 @@ interface CustomEvent<T = any> extends Event {
   readonly detail: T;
 }
 
-/** @category Events */
+/** The constructor object for {@linkcode CustomEvent}, used to construct an
+ * event that can carry arbitrary application-defined data via its `detail`
+ * property.
+ *
+ * @category Events */
 declare var CustomEvent: {
   readonly prototype: CustomEvent;
   new <T>(typeArg: string, eventInitDict?: CustomEventInit<T>): CustomEvent<T>;
@@ -14612,17 +16967,62 @@ declare function fetch(
   init?: RequestInit & { client?: Deno.HttpClient },
 ): Promise<Response>;
 
-// Copyright 2018-2025 the Deno authors. MIT license.
+/** @category Platform */
+interface Math {
+  /**
+   * Returns the sum of the given values using a more precise algorithm than a
+   * naive `+`-based reduction, avoiding the floating-point rounding errors
+   * that accumulate when summing many numbers.
+   *
+   * [MDN Reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Math/sumPrecise)
+   */
+  sumPrecise(values: Iterable<number>): number;
+}
+
+/** The `Intl` namespace groups the
+ * [ECMAScript Internationalization API](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Intl)
+ * constructors and functions.
+ *
+ * This declaration augments the standard `Intl` namespace with members that are
+ * not yet part of the bundled TypeScript library definitions.
+ *
+ * @category Intl */
+declare namespace Intl {
+  /** Augments the standard {@linkcode Intl.Locale} interface with members not
+   * yet present in the bundled TypeScript library definitions.
+   *
+   * @category Intl */
+  export interface Locale {
+    /**
+     * Returns the variant subtags of the locale as a single string, with
+     * subtags separated by `-`. Returns `undefined` if the locale has no
+     * variant subtags.
+     *
+     * [MDN Reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Intl/Locale/variants)
+     */
+    readonly variants: string | undefined;
+  }
+}
+
+// Copyright 2018-2026 the Deno authors. MIT license.
 
 // deno-lint-ignore-file no-var
 
 /// <reference no-default-lib="true" />
 /// <reference lib="esnext" />
 
-/** @category Cache */
+/** The global {@linkcode CacheStorage} instance, providing access to the named
+ * {@linkcode Cache} objects used to store and retrieve `Request`/`Response`
+ * pairs.
+ *
+ * @category Cache */
 declare var caches: CacheStorage;
 
-/** @category Cache */
+/** Represents the storage for named {@linkcode Cache} objects. It provides the
+ * methods used to open, enumerate, look up, and delete caches, and is accessed
+ * via the global {@linkcode caches} property.
+ *
+ * @category Cache */
 interface CacheStorage {
   /** Open a cache storage for the provided name. */
   open(cacheName: string): Promise<Cache>;
@@ -14630,15 +17030,32 @@ interface CacheStorage {
   has(cacheName: string): Promise<boolean>;
   /** Delete cache storage for the provided name. */
   delete(cacheName: string): Promise<boolean>;
+  /** Return an array of all cache names tracked by the cache storage. */
+  keys(): Promise<string[]>;
+  /**
+   * Check if a given `Request` or URL string is a key for a stored `Response`.
+   * Returns the matching `Response`, or `undefined` if no match is found.
+   *
+   * If `options.cacheName` is provided, only the cache with that name is
+   * searched. Otherwise, all caches are searched in creation order.
+   */
+  match(
+    request: RequestInfo | URL,
+    options?: MultiCacheQueryOptions,
+  ): Promise<Response | undefined>;
 }
 
-/** @category Cache */
+/** Represents a single named store of `Request`/`Response` pairs. Obtain a
+ * `Cache` via {@linkcode CacheStorage.open} and use it to persist responses and
+ * later match incoming requests against them.
+ *
+ * @category Cache */
 interface Cache {
   /**
    * Put the provided request/response into the cache.
    *
    * How is the API different from browsers?
-   * 1. You cannot match cache objects using by relative paths.
+   * 1. You cannot match cache objects using relative paths.
    * 2. You cannot pass options like `ignoreVary`, `ignoreMethod`, `ignoreSearch`.
    */
   put(request: RequestInfo | URL, response: Response): Promise<void>;
@@ -14646,7 +17063,7 @@ interface Cache {
    * Return cache object matching the provided request.
    *
    * How is the API different from browsers?
-   * 1. You cannot match cache objects using by relative paths.
+   * 1. You cannot match cache objects using relative paths.
    * 2. You cannot pass options like `ignoreVary`, `ignoreMethod`, `ignoreSearch`.
    */
   match(
@@ -14657,22 +17074,44 @@ interface Cache {
    * Delete cache object matching the provided request.
    *
    * How is the API different from browsers?
-   * 1. You cannot delete cache objects using by relative paths.
+   * 1. You cannot delete cache objects using relative paths.
    * 2. You cannot pass options like `ignoreVary`, `ignoreMethod`, `ignoreSearch`.
    */
   delete(
     request: RequestInfo | URL,
     options?: CacheQueryOptions,
   ): Promise<boolean>;
+  /**
+   * Return the {@linkcode Request} keys stored in the cache, in insertion
+   * order. When a `request` is provided, only the matching keys are returned.
+   *
+   * How is the API different from browsers?
+   * 1. You cannot match cache objects using relative paths.
+   * 2. You cannot pass options like `ignoreVary`, `ignoreMethod`, `ignoreSearch`.
+   */
+  keys(
+    request?: RequestInfo | URL,
+    options?: CacheQueryOptions,
+  ): Promise<ReadonlyArray<Request>>;
 }
 
-/** @category Cache */
+/** The constructor object for {@linkcode Cache}.
+ *
+ * `Cache` instances are obtained via {@linkcode CacheStorage.open} rather than
+ * constructed directly, so calling the constructor throws.
+ *
+ * @category Cache */
 declare var Cache: {
   readonly prototype: Cache;
   new (): never;
 };
 
-/** @category Cache */
+/** The constructor object for {@linkcode CacheStorage}.
+ *
+ * The `CacheStorage` instance is accessed via the global {@linkcode caches}
+ * property rather than constructed directly, so calling the constructor throws.
+ *
+ * @category Cache */
 declare var CacheStorage: {
   readonly prototype: CacheStorage;
   new (): never;
@@ -14685,7 +17124,498 @@ interface CacheQueryOptions {
   ignoreVary?: boolean;
 }
 
-// Copyright 2018-2025 the Deno authors. MIT license.
+/** @category Cache */
+interface MultiCacheQueryOptions extends CacheQueryOptions {
+  cacheName?: string;
+}
+
+/*! *****************************************************************************
+Copyright (c) Microsoft Corporation. All rights reserved.
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+this file except in compliance with the License. You may obtain a copy of the
+License at http://www.apache.org/licenses/LICENSE-2.0
+
+THIS CODE IS PROVIDED ON AN *AS IS* BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+KIND, EITHER EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION ANY IMPLIED
+WARRANTIES OR CONDITIONS OF TITLE, FITNESS FOR A PARTICULAR PURPOSE,
+MERCHANTABILITY OR NON-INFRINGEMENT.
+
+See the Apache Version 2.0 License for specific language governing permissions
+and limitations under the License.
+***************************************************************************** */
+
+
+/// <reference lib="es2015.symbol.wellknown" />
+/// <reference lib="es2020.intl" />
+/// <reference lib="es2025.intl" />
+
+declare namespace Temporal {
+    type CalendarLike = PlainDate | PlainDateTime | PlainMonthDay | PlainYearMonth | ZonedDateTime | string;
+    type DurationLike = Duration | DurationLikeObject | string;
+    type InstantLike = Instant | ZonedDateTime | string;
+    type PlainDateLike = PlainDate | ZonedDateTime | PlainDateTime | DateLikeObject | string;
+    type PlainDateTimeLike = PlainDateTime | ZonedDateTime | PlainDate | DateTimeLikeObject | string;
+    type PlainMonthDayLike = PlainMonthDay | DateLikeObject | string;
+    type PlainTimeLike = PlainTime | PlainDateTime | ZonedDateTime | TimeLikeObject | string;
+    type PlainYearMonthLike = PlainYearMonth | YearMonthLikeObject | string;
+    type TimeZoneLike = ZonedDateTime | string;
+    type ZonedDateTimeLike = ZonedDateTime | ZonedDateTimeLikeObject | string;
+
+    type PartialTemporalLike<T extends object> = {
+        [P in Exclude<keyof T, "calendar" | "timeZone">]?: T[P] | undefined;
+    };
+
+    interface DateLikeObject {
+        year?: number | undefined;
+        era?: string | undefined;
+        eraYear?: number | undefined;
+        month?: number | undefined;
+        monthCode?: string | undefined;
+        day: number;
+        calendar?: string | undefined;
+    }
+
+    interface DateTimeLikeObject extends DateLikeObject, TimeLikeObject {}
+
+    interface DurationLikeObject {
+        years?: number | undefined;
+        months?: number | undefined;
+        weeks?: number | undefined;
+        days?: number | undefined;
+        hours?: number | undefined;
+        minutes?: number | undefined;
+        seconds?: number | undefined;
+        milliseconds?: number | undefined;
+        microseconds?: number | undefined;
+        nanoseconds?: number | undefined;
+    }
+
+    interface TimeLikeObject {
+        hour?: number | undefined;
+        minute?: number | undefined;
+        second?: number | undefined;
+        millisecond?: number | undefined;
+        microsecond?: number | undefined;
+        nanosecond?: number | undefined;
+    }
+
+    interface YearMonthLikeObject extends Omit<DateLikeObject, "day"> {}
+
+    interface ZonedDateTimeLikeObject extends DateTimeLikeObject {
+        timeZone: TimeZoneLike;
+        offset?: string | undefined;
+    }
+
+    type DateUnit = "year" | "month" | "week" | "day";
+    type TimeUnit = "hour" | "minute" | "second" | "millisecond" | "microsecond" | "nanosecond";
+    type PluralizeUnit<T extends DateUnit | TimeUnit> =
+        | T
+        | {
+            year: "years";
+            month: "months";
+            week: "weeks";
+            day: "days";
+            hour: "hours";
+            minute: "minutes";
+            second: "seconds";
+            millisecond: "milliseconds";
+            microsecond: "microseconds";
+            nanosecond: "nanoseconds";
+        }[T];
+
+    interface DisambiguationOptions {
+        disambiguation?: "compatible" | "earlier" | "later" | "reject" | undefined;
+    }
+
+    interface OverflowOptions {
+        overflow?: "constrain" | "reject" | undefined;
+    }
+
+    interface TransitionOptions {
+        direction: "next" | "previous";
+    }
+
+    interface RoundingOptions<Units extends DateUnit | TimeUnit> {
+        smallestUnit?: PluralizeUnit<Units> | undefined;
+        roundingIncrement?: number | undefined;
+        roundingMode?: "ceil" | "floor" | "expand" | "trunc" | "halfCeil" | "halfFloor" | "halfExpand" | "halfTrunc" | "halfEven" | undefined;
+    }
+
+    interface RoundingOptionsWithLargestUnit<Units extends DateUnit | TimeUnit> extends RoundingOptions<Units> {
+        largestUnit?: "auto" | PluralizeUnit<Units> | undefined;
+    }
+
+    interface ToStringRoundingOptions<Units extends DateUnit | TimeUnit> extends Pick<RoundingOptions<Units>, "smallestUnit" | "roundingMode"> {}
+
+    interface ToStringRoundingOptionsWithFractionalSeconds<Units extends DateUnit | TimeUnit> extends ToStringRoundingOptions<Units> {
+        fractionalSecondDigits?: "auto" | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | undefined;
+    }
+
+    namespace Now {
+        function timeZoneId(): string;
+        function instant(): Instant;
+        function plainDateTimeISO(timeZone?: TimeZoneLike): PlainDateTime;
+        function zonedDateTimeISO(timeZone?: TimeZoneLike): ZonedDateTime;
+        function plainDateISO(timeZone?: TimeZoneLike): PlainDate;
+        function plainTimeISO(timeZone?: TimeZoneLike): PlainTime;
+    }
+
+    interface PlainDateToStringOptions {
+        calendarName?: "auto" | "always" | "never" | "critical" | undefined;
+    }
+
+    interface PlainDateToZonedDateTimeOptions {
+        plainTime?: PlainTimeLike | undefined;
+        timeZone: TimeZoneLike;
+    }
+
+    interface PlainDate {
+        readonly calendarId: string;
+        readonly era: string | undefined;
+        readonly eraYear: number | undefined;
+        readonly year: number;
+        readonly month: number;
+        readonly monthCode: string;
+        readonly day: number;
+        readonly dayOfWeek: number;
+        readonly dayOfYear: number;
+        readonly weekOfYear: number | undefined;
+        readonly yearOfWeek: number | undefined;
+        readonly daysInWeek: number;
+        readonly daysInMonth: number;
+        readonly daysInYear: number;
+        readonly monthsInYear: number;
+        readonly inLeapYear: boolean;
+        toPlainYearMonth(): PlainYearMonth;
+        toPlainMonthDay(): PlainMonthDay;
+        add(duration: DurationLike, options?: OverflowOptions): PlainDate;
+        subtract(duration: DurationLike, options?: OverflowOptions): PlainDate;
+        with(dateLike: PartialTemporalLike<DateLikeObject>, options?: OverflowOptions): PlainDate;
+        withCalendar(calendarLike: CalendarLike): PlainDate;
+        until(other: PlainDateLike, options?: RoundingOptionsWithLargestUnit<DateUnit>): Duration;
+        since(other: PlainDateLike, options?: RoundingOptionsWithLargestUnit<DateUnit>): Duration;
+        equals(other: PlainDateLike): boolean;
+        toPlainDateTime(time?: PlainTimeLike): PlainDateTime;
+        toZonedDateTime(timeZone: TimeZoneLike): ZonedDateTime;
+        toZonedDateTime(item: PlainDateToZonedDateTimeOptions): ZonedDateTime;
+        toString(options?: PlainDateToStringOptions): string;
+        toLocaleString(locales?: Intl.LocalesArgument, options?: Intl.DateTimeFormatOptions): string;
+        toJSON(): string;
+        valueOf(): never;
+        readonly [Symbol.toStringTag]: "Temporal.PlainDate";
+    }
+
+    interface PlainDateConstructor {
+        new (isoYear: number, isoMonth: number, isoDay: number, calendar?: string): PlainDate;
+        readonly prototype: PlainDate;
+        from(item: PlainDateLike, options?: OverflowOptions): PlainDate;
+        compare(one: PlainDateLike, two: PlainDateLike): number;
+    }
+    var PlainDate: PlainDateConstructor;
+
+    interface PlainTimeToStringOptions extends ToStringRoundingOptionsWithFractionalSeconds<Exclude<TimeUnit, "hour">> {}
+
+    interface PlainTime {
+        readonly hour: number;
+        readonly minute: number;
+        readonly second: number;
+        readonly millisecond: number;
+        readonly microsecond: number;
+        readonly nanosecond: number;
+        add(duration: DurationLike): PlainTime;
+        subtract(duration: DurationLike): PlainTime;
+        with(timeLike: PartialTemporalLike<TimeLikeObject>, options?: OverflowOptions): PlainTime;
+        until(other: PlainTimeLike, options?: RoundingOptionsWithLargestUnit<TimeUnit>): Duration;
+        since(other: PlainTimeLike, options?: RoundingOptionsWithLargestUnit<TimeUnit>): Duration;
+        equals(other: PlainTimeLike): boolean;
+        round(roundTo: PluralizeUnit<TimeUnit>): PlainTime;
+        round(roundTo: RoundingOptions<TimeUnit>): PlainTime;
+        toString(options?: PlainTimeToStringOptions): string;
+        toLocaleString(locales?: Intl.LocalesArgument, options?: Intl.DateTimeFormatOptions): string;
+        toJSON(): string;
+        valueOf(): never;
+        readonly [Symbol.toStringTag]: "Temporal.PlainTime";
+    }
+
+    interface PlainTimeConstructor {
+        new (hour?: number, minute?: number, second?: number, millisecond?: number, microsecond?: number, nanosecond?: number): PlainTime;
+        readonly prototype: PlainTime;
+        from(item: PlainTimeLike, options?: OverflowOptions): PlainTime;
+        compare(one: PlainTimeLike, two: PlainTimeLike): number;
+    }
+    var PlainTime: PlainTimeConstructor;
+
+    interface PlainDateTimeToStringOptions extends PlainDateToStringOptions, PlainTimeToStringOptions {}
+
+    interface PlainDateTime {
+        readonly calendarId: string;
+        readonly era: string | undefined;
+        readonly eraYear: number | undefined;
+        readonly year: number;
+        readonly month: number;
+        readonly monthCode: string;
+        readonly day: number;
+        readonly hour: number;
+        readonly minute: number;
+        readonly second: number;
+        readonly millisecond: number;
+        readonly microsecond: number;
+        readonly nanosecond: number;
+        readonly dayOfWeek: number;
+        readonly dayOfYear: number;
+        readonly weekOfYear: number | undefined;
+        readonly yearOfWeek: number | undefined;
+        readonly daysInWeek: number;
+        readonly daysInMonth: number;
+        readonly daysInYear: number;
+        readonly monthsInYear: number;
+        readonly inLeapYear: boolean;
+        with(dateTimeLike: PartialTemporalLike<DateTimeLikeObject>, options?: OverflowOptions): PlainDateTime;
+        withPlainTime(plainTime?: PlainTimeLike): PlainDateTime;
+        withCalendar(calendar: CalendarLike): PlainDateTime;
+        add(duration: DurationLike, options?: OverflowOptions): PlainDateTime;
+        subtract(duration: DurationLike, options?: OverflowOptions): PlainDateTime;
+        until(other: PlainDateTimeLike, options?: RoundingOptionsWithLargestUnit<DateUnit | TimeUnit>): Duration;
+        since(other: PlainDateTimeLike, options?: RoundingOptionsWithLargestUnit<DateUnit | TimeUnit>): Duration;
+        round(roundTo: PluralizeUnit<"day" | TimeUnit>): PlainDateTime;
+        round(roundTo: RoundingOptions<"day" | TimeUnit>): PlainDateTime;
+        equals(other: PlainDateTimeLike): boolean;
+        toString(options?: PlainDateTimeToStringOptions): string;
+        toLocaleString(locales?: Intl.LocalesArgument, options?: Intl.DateTimeFormatOptions): string;
+        toJSON(): string;
+        valueOf(): never;
+        toZonedDateTime(timeZone: TimeZoneLike, options?: DisambiguationOptions): ZonedDateTime;
+        toPlainDate(): PlainDate;
+        toPlainTime(): PlainTime;
+        readonly [Symbol.toStringTag]: "Temporal.PlainDateTime";
+    }
+
+    interface PlainDateTimeConstructor {
+        new (isoYear: number, isoMonth: number, isoDay: number, hour?: number, minute?: number, second?: number, millisecond?: number, microsecond?: number, nanosecond?: number, calendar?: string): PlainDateTime;
+        readonly prototype: PlainDateTime;
+        from(item: PlainDateTimeLike, options?: OverflowOptions): PlainDateTime;
+        compare(one: PlainDateTimeLike, two: PlainDateTimeLike): number;
+    }
+    var PlainDateTime: PlainDateTimeConstructor;
+
+    interface ZonedDateTimeToStringOptions extends PlainDateTimeToStringOptions {
+        offset?: "auto" | "never" | undefined;
+        timeZoneName?: "auto" | "never" | "critical" | undefined;
+    }
+
+    interface ZonedDateTimeFromOptions extends OverflowOptions, DisambiguationOptions {
+        offset?: "use" | "ignore" | "prefer" | "reject" | undefined;
+    }
+
+    interface ZonedDateTime {
+        readonly calendarId: string;
+        readonly timeZoneId: string;
+        readonly era: string | undefined;
+        readonly eraYear: number | undefined;
+        readonly year: number;
+        readonly month: number;
+        readonly monthCode: string;
+        readonly day: number;
+        readonly hour: number;
+        readonly minute: number;
+        readonly second: number;
+        readonly millisecond: number;
+        readonly microsecond: number;
+        readonly nanosecond: number;
+        readonly epochMilliseconds: number;
+        readonly epochNanoseconds: bigint;
+        readonly dayOfWeek: number;
+        readonly dayOfYear: number;
+        readonly weekOfYear: number | undefined;
+        readonly yearOfWeek: number | undefined;
+        readonly hoursInDay: number;
+        readonly daysInWeek: number;
+        readonly daysInMonth: number;
+        readonly daysInYear: number;
+        readonly monthsInYear: number;
+        readonly inLeapYear: boolean;
+        readonly offsetNanoseconds: number;
+        readonly offset: string;
+        with(zonedDateTimeLike: PartialTemporalLike<ZonedDateTimeLikeObject>, options?: ZonedDateTimeFromOptions): ZonedDateTime;
+        withPlainTime(plainTime?: PlainTimeLike): ZonedDateTime;
+        withTimeZone(timeZone: TimeZoneLike): ZonedDateTime;
+        withCalendar(calendar: CalendarLike): ZonedDateTime;
+        add(duration: DurationLike, options?: OverflowOptions): ZonedDateTime;
+        subtract(duration: DurationLike, options?: OverflowOptions): ZonedDateTime;
+        until(other: ZonedDateTimeLike, options?: RoundingOptionsWithLargestUnit<DateUnit | TimeUnit>): Duration;
+        since(other: ZonedDateTimeLike, options?: RoundingOptionsWithLargestUnit<DateUnit | TimeUnit>): Duration;
+        round(roundTo: PluralizeUnit<"day" | TimeUnit>): ZonedDateTime;
+        round(roundTo: RoundingOptions<"day" | TimeUnit>): ZonedDateTime;
+        equals(other: ZonedDateTimeLike): boolean;
+        toString(options?: ZonedDateTimeToStringOptions): string;
+        toLocaleString(locales?: Intl.LocalesArgument, options?: Intl.DateTimeFormatOptions): string;
+        toJSON(): string;
+        valueOf(): never;
+        startOfDay(): ZonedDateTime;
+        getTimeZoneTransition(direction: "next" | "previous"): ZonedDateTime | null;
+        getTimeZoneTransition(direction: TransitionOptions): ZonedDateTime | null;
+        toInstant(): Instant;
+        toPlainDate(): PlainDate;
+        toPlainTime(): PlainTime;
+        toPlainDateTime(): PlainDateTime;
+        readonly [Symbol.toStringTag]: "Temporal.ZonedDateTime";
+    }
+
+    interface ZonedDateTimeConstructor {
+        new (epochNanoseconds: bigint, timeZone: string, calendar?: string): ZonedDateTime;
+        readonly prototype: ZonedDateTime;
+        from(item: ZonedDateTimeLike, options?: ZonedDateTimeFromOptions): ZonedDateTime;
+        compare(one: ZonedDateTimeLike, two: ZonedDateTimeLike): number;
+    }
+    var ZonedDateTime: ZonedDateTimeConstructor;
+
+    interface DurationRelativeToOptions {
+        relativeTo?: ZonedDateTimeLike | PlainDateLike | undefined;
+    }
+
+    interface DurationRoundingOptions extends DurationRelativeToOptions, RoundingOptionsWithLargestUnit<DateUnit | TimeUnit> {}
+
+    interface DurationToStringOptions extends ToStringRoundingOptionsWithFractionalSeconds<Exclude<TimeUnit, "hour" | "minute">> {}
+
+    interface DurationTotalOptions extends DurationRelativeToOptions {
+        unit: PluralizeUnit<DateUnit | TimeUnit>;
+    }
+
+    interface Duration {
+        readonly years: number;
+        readonly months: number;
+        readonly weeks: number;
+        readonly days: number;
+        readonly hours: number;
+        readonly minutes: number;
+        readonly seconds: number;
+        readonly milliseconds: number;
+        readonly microseconds: number;
+        readonly nanoseconds: number;
+        readonly sign: number;
+        readonly blank: boolean;
+        with(durationLike: PartialTemporalLike<DurationLikeObject>): Duration;
+        negated(): Duration;
+        abs(): Duration;
+        add(other: DurationLike): Duration;
+        subtract(other: DurationLike): Duration;
+        round(roundTo: PluralizeUnit<"day" | TimeUnit>): Duration;
+        round(roundTo: DurationRoundingOptions): Duration;
+        total(totalOf: PluralizeUnit<"day" | TimeUnit>): number;
+        total(totalOf: DurationTotalOptions): number;
+        toString(options?: DurationToStringOptions): string;
+        toLocaleString(locales?: Intl.LocalesArgument, options?: Intl.DurationFormatOptions): string;
+        toJSON(): string;
+        valueOf(): never;
+        readonly [Symbol.toStringTag]: "Temporal.Duration";
+    }
+
+    interface DurationConstructor {
+        new (years?: number, months?: number, weeks?: number, days?: number, hours?: number, minutes?: number, seconds?: number, milliseconds?: number, microseconds?: number, nanoseconds?: number): Duration;
+        readonly prototype: Duration;
+        from(item: DurationLike): Duration;
+        compare(one: DurationLike, two: DurationLike, options?: DurationRelativeToOptions): number;
+    }
+    var Duration: DurationConstructor;
+
+    interface InstantToStringOptions extends PlainTimeToStringOptions {
+        timeZone?: TimeZoneLike | undefined;
+    }
+
+    interface Instant {
+        readonly epochMilliseconds: number;
+        readonly epochNanoseconds: bigint;
+        add(duration: DurationLike): Instant;
+        subtract(duration: DurationLike): Instant;
+        until(other: InstantLike, options?: RoundingOptionsWithLargestUnit<TimeUnit>): Duration;
+        since(other: InstantLike, options?: RoundingOptionsWithLargestUnit<TimeUnit>): Duration;
+        round(roundTo: PluralizeUnit<TimeUnit>): Instant;
+        round(roundTo: RoundingOptions<TimeUnit>): Instant;
+        equals(other: InstantLike): boolean;
+        toString(options?: InstantToStringOptions): string;
+        toLocaleString(locales?: Intl.LocalesArgument, options?: Intl.DateTimeFormatOptions): string;
+        toJSON(): string;
+        valueOf(): never;
+        toZonedDateTimeISO(timeZone: TimeZoneLike): ZonedDateTime;
+        readonly [Symbol.toStringTag]: "Temporal.Instant";
+    }
+
+    interface InstantConstructor {
+        new (epochNanoseconds: bigint): Instant;
+        readonly prototype: Instant;
+        from(item: InstantLike): Instant;
+        fromEpochMilliseconds(epochMilliseconds: number): Instant;
+        fromEpochNanoseconds(epochNanoseconds: bigint): Instant;
+        compare(one: InstantLike, two: InstantLike): number;
+    }
+    var Instant: InstantConstructor;
+
+    interface PlainYearMonthToPlainDateOptions {
+        day: number;
+    }
+
+    interface PlainYearMonth {
+        readonly calendarId: string;
+        readonly era: string | undefined;
+        readonly eraYear: number | undefined;
+        readonly year: number;
+        readonly month: number;
+        readonly monthCode: string;
+        readonly daysInYear: number;
+        readonly daysInMonth: number;
+        readonly monthsInYear: number;
+        readonly inLeapYear: boolean;
+        with(yearMonthLike: PartialTemporalLike<YearMonthLikeObject>, options?: OverflowOptions): PlainYearMonth;
+        add(duration: DurationLike, options?: OverflowOptions): PlainYearMonth;
+        subtract(duration: DurationLike, options?: OverflowOptions): PlainYearMonth;
+        until(other: PlainYearMonthLike, options?: RoundingOptionsWithLargestUnit<"year" | "month">): Duration;
+        since(other: PlainYearMonthLike, options?: RoundingOptionsWithLargestUnit<"year" | "month">): Duration;
+        equals(other: PlainYearMonthLike): boolean;
+        toString(options?: PlainDateToStringOptions): string;
+        toLocaleString(locales?: Intl.LocalesArgument, options?: Intl.DateTimeFormatOptions): string;
+        toJSON(): string;
+        valueOf(): never;
+        toPlainDate(item: PlainYearMonthToPlainDateOptions): PlainDate;
+        readonly [Symbol.toStringTag]: "Temporal.PlainYearMonth";
+    }
+
+    interface PlainYearMonthConstructor {
+        new (isoYear: number, isoMonth: number, calendar?: string, referenceISODay?: number): PlainYearMonth;
+        readonly prototype: PlainYearMonth;
+        from(item: PlainYearMonthLike, options?: OverflowOptions): PlainYearMonth;
+        compare(one: PlainYearMonthLike, two: PlainYearMonthLike): number;
+    }
+    var PlainYearMonth: PlainYearMonthConstructor;
+
+    interface PlainMonthDayToPlainDateOptions {
+        era?: string | undefined;
+        eraYear?: number | undefined;
+        year?: number | undefined;
+    }
+
+    interface PlainMonthDay {
+        readonly calendarId: string;
+        readonly monthCode: string;
+        readonly day: number;
+        with(monthDayLike: PartialTemporalLike<DateLikeObject>, options?: OverflowOptions): PlainMonthDay;
+        equals(other: PlainMonthDayLike): boolean;
+        toString(options?: PlainDateToStringOptions): string;
+        toLocaleString(locales?: Intl.LocalesArgument, options?: Intl.DateTimeFormatOptions): string;
+        toJSON(): string;
+        valueOf(): never;
+        toPlainDate(item: PlainMonthDayToPlainDateOptions): PlainDate;
+        readonly [Symbol.toStringTag]: "Temporal.PlainMonthDay";
+    }
+
+    interface PlainMonthDayConstructor {
+        new (isoMonth: number, isoDay: number, calendar?: string, referenceISOYear?: number): PlainMonthDay;
+        readonly prototype: PlainMonthDay;
+        from(item: PlainMonthDayLike, options?: OverflowOptions): PlainMonthDay;
+    }
+    var PlainMonthDay: PlainMonthDayConstructor;
+}
+
+// Copyright 2018-2026 the Deno authors. MIT license.
 
 /// <reference no-default-lib="true" />
 /// <reference lib="deno.ns" />
@@ -15049,6 +17979,8 @@ interface Navigator {
   readonly userAgent: string;
   readonly language: string;
   readonly languages: string[];
+  readonly platform: string;
+  readonly userAgentData: NavigatorUAData;
 }
 
 /**
@@ -15163,7 +18095,11 @@ declare function addEventListener<
   listener: (this: Window, ev: WindowEventMap[K]) => any,
   options?: boolean | AddEventListenerOptions,
 ): void;
-/** @category Events */
+/** Registers an event listener for an arbitrary event `type` on the global
+ * scope.
+ *
+ * @category Events
+ */
 declare function addEventListener(
   type: string,
   listener: EventListenerOrEventListenerObject,
@@ -15187,7 +18123,11 @@ declare function removeEventListener<
   listener: (this: Window, ev: WindowEventMap[K]) => any,
   options?: boolean | EventListenerOptions,
 ): void;
-/** @category Events */
+/** Removes a previously registered event listener for an arbitrary event
+ * `type` from the global scope.
+ *
+ * @category Events
+ */
 declare function removeEventListener(
   type: string,
   listener: EventListenerOrEventListenerObject,
@@ -15279,22 +18219,224 @@ declare var Location: {
 
 // TODO(nayeemrmn): Move this to `extensions/web` where its implementation is.
 // The types there must first be split into window, worker and global types.
-/** @category Platform */
+/** The {@linkcode Location} object describing the absolute URL of the main
+ * module, available when the program is started with the `--location` flag.
+ * Accessing it without `--location` throws.
+ *
+ * @category Platform */
 declare var location: Location;
 
-/** @category Platform */
+/** Gets or sets the name of the global scope's browsing context.
+ *
+ * Provided for web compatibility; Deno has no browsing context, so this is an
+ * empty string by default.
+ *
+ * @category Platform */
 declare var name: string;
 
-// Copyright 2018-2025 the Deno authors. MIT license.
+// Copyright 2018-2026 the Deno authors. MIT license.
 
 /// <reference no-default-lib="true" />
 /// <reference lib="deno.ns" />
-/// <reference lib="deno.broadcast_channel" />
 /// <reference lib="esnext" />
 /// <reference lib="es2022.intl" />
 
 declare namespace Deno {
   export {}; // stop default export type behavior
+
+  /**
+   * @category Bundler
+   * @experimental
+   */
+  export namespace bundle {
+    /**
+     * The target platform of the bundle.
+     * @category Bundler
+     * @experimental
+     */
+    export type Platform = "browser" | "deno";
+
+    /**
+     * The output format of the bundle.
+     * @category Bundler
+     * @experimental
+     */
+    export type Format = "esm" | "cjs" | "iife";
+
+    /**
+     * The source map type of the bundle.
+     * @category Bundler
+     * @experimental
+     */
+    export type SourceMapType = "linked" | "inline" | "external";
+
+    /**
+     * How to handle packages.
+     *
+     * - `bundle`: packages are inlined into the bundle.
+     * - `external`: packages are excluded from the bundle, and treated as external dependencies.
+     * @category Bundler
+     * @experimental
+     */
+    export type PackageHandling = "bundle" | "external";
+
+    /**
+     * Options for the bundle.
+     * @category Bundler
+     * @experimental
+     */
+    export interface Options {
+      /**
+       * The entrypoints of the bundle.
+       */
+      entrypoints: string[];
+      /**
+       * Output file path.
+       */
+      outputPath?: string;
+      /**
+       * Output directory path.
+       */
+      outputDir?: string;
+      /**
+       * External modules to exclude from bundling.
+       */
+      external?: string[];
+      /**
+       * Bundle format.
+       */
+      format?: Format;
+      /**
+       * Whether to minify the output.
+       */
+      minify?: boolean;
+      /**
+       * Whether to keep function and class names.
+       */
+      keepNames?: boolean;
+      /**
+       * Whether to enable code splitting.
+       */
+      codeSplitting?: boolean;
+      /**
+       * Whether to inline imports.
+       */
+      inlineImports?: boolean;
+      /**
+       * How to handle packages.
+       */
+      packages?: PackageHandling;
+      /**
+       * Source map configuration.
+       */
+      sourcemap?: SourceMapType;
+      /**
+       * Target platform.
+       */
+      platform?: Platform;
+
+      /**
+       * Whether to write the output to the filesystem.
+       *
+       * @default true if outputDir or outputPath is set, false otherwise
+       */
+      write?: boolean;
+    }
+
+    /**
+     * The location of a message.
+     * @category Bundler
+     * @experimental
+     */
+    export interface MessageLocation {
+      file: string;
+      namespace?: string;
+      line: number;
+      column: number;
+      length: number;
+      suggestion?: string;
+    }
+
+    /**
+     * A note about a message.
+     * @category Bundler
+     * @experimental
+     */
+    export interface MessageNote {
+      text: string;
+      location?: MessageLocation;
+    }
+
+    /**
+     * A message emitted from the bundler.
+     * @category Bundler
+     * @experimental
+     */
+    export interface Message {
+      text: string;
+      location?: MessageLocation;
+      notes?: MessageNote[];
+    }
+
+    /**
+     * An output file in the bundle.
+     * @category Bundler
+     * @experimental
+     */
+    export interface OutputFile {
+      path: string;
+      contents?: Uint8Array<ArrayBuffer>;
+      hash: string;
+      text(): string;
+    }
+
+    /**
+     * The result of bundling.
+     * @category Bundler
+     * @experimental
+     */
+    export interface Result {
+      errors: Message[];
+      warnings: Message[];
+      success: boolean;
+      outputFiles?: OutputFile[];
+    }
+
+    export {}; // only export exports
+  }
+
+  /** **UNSTABLE**: New API, yet to be vetted.
+   *
+   * Bundle Typescript/Javascript code into a single file.
+   *
+   * This is an unstable API and requires the `--unstable-bundle` flag to be
+   * passed when running Deno:
+   *
+   * ```sh
+   * deno run --unstable-bundle main.ts
+   * ```
+   *
+   * ```ts
+   * const result = await Deno.bundle({
+   *   entrypoints: ["./main.ts"],
+   *   minify: true,
+   * });
+   *
+   * for (const file of result.outputFiles ?? []) {
+   *   console.log(file.text());
+   * }
+   * ```
+   *
+   * Requires read access to local entrypoints and their dependency trees,
+   * import access to remote modules, and write access when output is written
+   * to the filesystem.
+   *
+   * @category Bundler
+   * @experimental
+   */
+  export function bundle(
+    options: Deno.bundle.Options,
+  ): Promise<Deno.bundle.Result>;
 
   /** **UNSTABLE**: New API, yet to be vetted.
    *
@@ -15314,6 +18456,11 @@ declare namespace Deno {
    * @experimental
    */
   export class UnsafeWindowSurface {
+    /** The height of the window. */
+    height: number;
+    /** The width of the window. */
+    width: number;
+
     constructor(
       options: {
         system: "cocoa" | "win32" | "x11" | "wayland";
@@ -15323,12 +18470,13 @@ declare namespace Deno {
         height: number;
       },
     );
-    getContext(context: "webgpu"): GPUCanvasContext;
+
+    getContext(
+      contextId: OffscreenRenderingContextId,
+      options?: any,
+    ): OffscreenRenderingContext | null;
+
     present(): void;
-    /**
-     * This method should be invoked when the size of the window changes.
-     */
-    resize(width: number, height: number): void;
   }
 
   /** **UNSTABLE**: New API, yet to be vetted.
@@ -15470,6 +18618,20 @@ declare namespace Deno {
 
   /** **UNSTABLE**: New API, yet to be vetted.
    *
+   * Unstable options which can be set when opening a `unixpacket` datagram
+   * listener via {@linkcode Deno.listenDatagram}.
+   *
+   * @category Network
+   * @experimental
+   */
+  export interface UnixListenDatagramOptions {
+    /** A path to the Unix Socket. When omitted the socket is left unbound, so
+     * it can be used to send messages but cannot receive them. */
+    path?: string;
+  }
+
+  /** **UNSTABLE**: New API, yet to be vetted.
+   *
    * Listen announces on the local transport address.
    *
    * ```ts
@@ -15479,28 +18641,52 @@ declare namespace Deno {
    * });
    * ```
    *
-   * Requires `allow-read` and `allow-write` permission.
+   * Requires `allow-read`, `allow-write` and `allow-net` permission. The
+   * `allow-net` grant may be scoped to the socket path with
+   * `--allow-net=unix:<absolute-path>`.
    *
-   * @tags allow-read, allow-write
+   * @tags allow-read, allow-write, allow-net
    * @category Network
    * @experimental
    */
   export function listenDatagram(
-    options: UnixListenOptions & { transport: "unixpacket" },
+    options: UnixListenDatagramOptions & { transport: "unixpacket" },
   ): DatagramConn;
 
   /** **UNSTABLE**: New API, yet to be vetted.
    *
    * Open a new {@linkcode Deno.Kv} connection to persist data.
    *
-   * When a path is provided, the database will be persisted to disk at that
-   * path. Read and write access to the file is required.
+   * This is an unstable API and requires the `--unstable-kv` flag to be passed
+   * when running Deno.
+   *
+   * The `path` argument accepts several forms:
+   *
+   * - A path to a local SQLite database **file** (not a directory). The file,
+   *   and any missing parent directories, are created if they don't exist. For
+   *   example `Deno.openKv("./my_database.sqlite")`. Read and write access to
+   *   the file is required.
+   * - The special value `":memory:"` to open an in-memory database that is
+   *   discarded when the process exits.
+   * - An `http://` or `https://` URL pointing at a remote KV database, such as
+   *   one hosted on Deno Deploy.
    *
    * When no path is provided, the database will be opened in a default path for
    * the current script. This location is persistent across script runs and is
    * keyed on the origin storage key (the same key that is used to determine
    * `localStorage` persistence). More information about the origin storage key
    * can be found in the Deno Manual.
+   *
+   * ```ts
+   * // Open (or create) a database backed by a local file.
+   * const kv = await Deno.openKv("./my_database.sqlite");
+   *
+   * await kv.set(["users", "alice"], { name: "Alice" });
+   * const entry = await kv.get(["users", "alice"]);
+   * console.log(entry.value); // { name: "Alice" }
+   *
+   * kv.close();
+   * ```
    *
    * @tags allow-read, allow-write
    * @category Cloud
@@ -15541,6 +18727,9 @@ declare namespace Deno {
    * Create a cron job that will periodically execute the provided handler
    * callback based on the specified schedule.
    *
+   * This is an unstable API and requires the `--unstable-cron` flag to be
+   * passed when running Deno.
+   *
    * ```ts
    * Deno.cron("sample cron", "20 * * * *", () => {
    *   console.log("cron job executed");
@@ -15556,6 +18745,13 @@ declare namespace Deno {
    * `schedule` can be a string in the Unix cron format or in JSON format
    * as specified by interface {@linkcode CronSchedule}, where time is specified
    * using UTC time zone.
+   *
+   * Calling `Deno.cron` registers the job and immediately returns. The returned
+   * promise should not be awaited to wait for the job to run, it is provided
+   * only to surface registration errors. The job keeps running in the
+   * background for the lifetime of the process. To be able to stop a cron job
+   * (for example during a graceful shutdown), use the overload that accepts an
+   * `options` object with an {@linkcode AbortSignal}.
    *
    * @category Cloud
    * @experimental
@@ -15589,6 +18785,21 @@ declare namespace Deno {
    * means that a failed execution will be retried at most 3 times, with 1
    * second, 5 seconds, and 10 seconds delay between each retry. There is a
    * limit of 5 retries and a maximum interval of 1 hour (3600000 milliseconds).
+   *
+   * `signal` option can be used to stop the cron job by passing an
+   * {@linkcode AbortSignal} and aborting it. This is useful for implementing a
+   * graceful shutdown, since aborting the signal unregisters the job:
+   *
+   * ```ts
+   * const ac = new AbortController();
+   *
+   * Deno.cron("sample cron", "20 * * * *", { signal: ac.signal }, () => {
+   *   console.log("cron job executed");
+   * });
+   *
+   * // Later, stop the cron job from running again.
+   * ac.abort();
+   * ```
    *
    * @category Cloud
    * @experimental
@@ -19693,12 +22904,12 @@ interface WorkerOptions {
   /** **UNSTABLE**: New API, yet to be vetted.
    *
    * Configure permissions options to change the level of access the worker will
-   * have. By default it will have no permissions. Note that the permissions
+   * have. By default it will inherit permissions. Note that the permissions
    * of a worker can't be extended beyond its parent's permissions reach.
    *
-   * - `"inherit"` will take the permissions of the thread the worker is created
-   *   in.
-   * - `"none"` will use the default behavior and have no permission
+   * - `"inherit"` will use the default behavior and take the permissions of the
+   *   thread the worker is created in
+   * - `"none"` will have no permissions
    * - A list of routes can be provided that are relative to the file the worker
    *   is created in to limit the access of the worker (read/write permissions
    *   only)
@@ -19803,1554 +23014,6 @@ declare var WebSocketError: {
   readonly prototype: WebSocketError;
   new (message?: string, init?: WebSocketCloseInfo): WebSocketError;
 };
-
-// Adapted from `tc39/proposal-temporal`: https://github.com/tc39/proposal-temporal/blob/main/polyfill/index.d.ts
-
-/**
- * [Specification](https://tc39.es/proposal-temporal/docs/index.html)
- *
- * @category Temporal
- * @experimental
- */
-declare namespace Temporal {
-  /**
-   * @category Temporal
-   * @experimental
-   */
-  export type ComparisonResult = -1 | 0 | 1;
-  /**
-   * @category Temporal
-   * @experimental
-   */
-  export type RoundingMode =
-    | "ceil"
-    | "floor"
-    | "expand"
-    | "trunc"
-    | "halfCeil"
-    | "halfFloor"
-    | "halfExpand"
-    | "halfTrunc"
-    | "halfEven";
-
-  /**
-   * Options for assigning fields using `with()` or entire objects with
-   * `from()`.
-   *
-   * @category Temporal
-   * @experimental
-   */
-  export type AssignmentOptions = {
-    /**
-     * How to deal with out-of-range values
-     *
-     * - In `'constrain'` mode, out-of-range values are clamped to the nearest
-     *   in-range value.
-     * - In `'reject'` mode, out-of-range values will cause the function to
-     *   throw a RangeError.
-     *
-     * The default is `'constrain'`.
-     */
-    overflow?: "constrain" | "reject";
-  };
-
-  /**
-   * Options for assigning fields using `Duration.prototype.with()` or entire
-   * objects with `Duration.from()`, and for arithmetic with
-   * `Duration.prototype.add()` and `Duration.prototype.subtract()`.
-   *
-   * @category Temporal
-   * @experimental
-   */
-  export type DurationOptions = {
-    /**
-     * How to deal with out-of-range values
-     *
-     * - In `'constrain'` mode, out-of-range values are clamped to the nearest
-     *   in-range value.
-     * - In `'balance'` mode, out-of-range values are resolved by balancing them
-     *   with the next highest unit.
-     *
-     * The default is `'constrain'`.
-     */
-    overflow?: "constrain" | "balance";
-  };
-
-  /**
-   * Options for conversions of `Temporal.PlainDateTime` to `Temporal.Instant`
-   *
-   * @category Temporal
-   * @experimental
-   */
-  export type ToInstantOptions = {
-    /**
-     * Controls handling of invalid or ambiguous times caused by time zone
-     * offset changes like Daylight Saving time (DST) transitions.
-     *
-     * This option is only relevant if a `DateTime` value does not exist in the
-     * destination time zone (e.g. near "Spring Forward" DST transitions), or
-     * exists more than once (e.g. near "Fall Back" DST transitions).
-     *
-     * In case of ambiguous or nonexistent times, this option controls what
-     * exact time to return:
-     * - `'compatible'`: Equivalent to `'earlier'` for backward transitions like
-     *   the start of DST in the Spring, and `'later'` for forward transitions
-     *   like the end of DST in the Fall. This matches the behavior of legacy
-     *   `Date`, of libraries like moment.js, Luxon, or date-fns, and of
-     *   cross-platform standards like [RFC 5545
-     *   (iCalendar)](https://tools.ietf.org/html/rfc5545).
-     * - `'earlier'`: The earlier time of two possible times
-     * - `'later'`: The later of two possible times
-     * - `'reject'`: Throw a RangeError instead
-     *
-     * The default is `'compatible'`.
-     */
-    disambiguation?: "compatible" | "earlier" | "later" | "reject";
-  };
-
-  /**
-   * @category Temporal
-   * @experimental
-   */
-  export type OffsetDisambiguationOptions = {
-    /**
-     * Time zone definitions can change. If an application stores data about
-     * events in the future, then stored data about future events may become
-     * ambiguous, for example if a country permanently abolishes DST. The
-     * `offset` option controls this unusual case.
-     *
-     * - `'use'` always uses the offset (if it's provided) to calculate the
-     *   instant. This ensures that the result will match the instant that was
-     *   originally stored, even if local clock time is different.
-     * - `'prefer'` uses the offset if it's valid for the date/time in this time
-     *   zone, but if it's not valid then the time zone will be used as a
-     *   fallback to calculate the instant.
-     * - `'ignore'` will disregard any provided offset. Instead, the time zone
-     *    and date/time value are used to calculate the instant. This will keep
-     *    local clock time unchanged but may result in a different real-world
-     *    instant.
-     * - `'reject'` acts like `'prefer'`, except it will throw a RangeError if
-     *   the offset is not valid for the given time zone identifier and
-     *   date/time value.
-     *
-     * If the ISO string ends in 'Z' then this option is ignored because there
-     * is no possibility of ambiguity.
-     *
-     * If a time zone offset is not present in the input, then this option is
-     * ignored because the time zone will always be used to calculate the
-     * offset.
-     *
-     * If the offset is not used, and if the date/time and time zone don't
-     * uniquely identify a single instant, then the `disambiguation` option will
-     * be used to choose the correct instant. However, if the offset is used
-     * then the `disambiguation` option will be ignored.
-     */
-    offset?: "use" | "prefer" | "ignore" | "reject";
-  };
-
-  /**
-   * @category Temporal
-   * @experimental
-   */
-  export type ZonedDateTimeAssignmentOptions = Partial<
-    AssignmentOptions & ToInstantOptions & OffsetDisambiguationOptions
-  >;
-
-  /**
-   * Options for arithmetic operations like `add()` and `subtract()`
-   *
-   * @category Temporal
-   * @experimental
-   */
-  export type ArithmeticOptions = {
-    /**
-     * Controls handling of out-of-range arithmetic results.
-     *
-     * If a result is out of range, then `'constrain'` will clamp the result to
-     * the allowed range, while `'reject'` will throw a RangeError.
-     *
-     * The default is `'constrain'`.
-     */
-    overflow?: "constrain" | "reject";
-  };
-
-  /**
-   * @category Temporal
-   * @experimental
-   */
-  export type DateUnit = "year" | "month" | "week" | "day";
-  /**
-   * @category Temporal
-   * @experimental
-   */
-  export type TimeUnit =
-    | "hour"
-    | "minute"
-    | "second"
-    | "millisecond"
-    | "microsecond"
-    | "nanosecond";
-  /**
-   * @category Temporal
-   * @experimental
-   */
-  export type DateTimeUnit = DateUnit | TimeUnit;
-
-  /**
-   * When the name of a unit is provided to a Temporal API as a string, it is
-   * usually singular, e.g. 'day' or 'hour'. But plural unit names like 'days'
-   * or 'hours' are also accepted.
-   *
-   * @category Temporal
-   * @experimental
-   */
-  export type PluralUnit<T extends DateTimeUnit> = {
-    year: "years";
-    month: "months";
-    week: "weeks";
-    day: "days";
-    hour: "hours";
-    minute: "minutes";
-    second: "seconds";
-    millisecond: "milliseconds";
-    microsecond: "microseconds";
-    nanosecond: "nanoseconds";
-  }[T];
-
-  /**
-   * @category Temporal
-   * @experimental
-   */
-  export type LargestUnit<T extends DateTimeUnit> = "auto" | T | PluralUnit<T>;
-  /**
-   * @category Temporal
-   * @experimental
-   */
-  export type SmallestUnit<T extends DateTimeUnit> = T | PluralUnit<T>;
-  /**
-   * @category Temporal
-   * @experimental
-   */
-  export type TotalUnit<T extends DateTimeUnit> = T | PluralUnit<T>;
-
-  /**
-   * Options for outputting precision in toString() on types with seconds
-   *
-   * @category Temporal
-   * @experimental
-   */
-  export type ToStringPrecisionOptions = {
-    fractionalSecondDigits?: "auto" | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
-    smallestUnit?: SmallestUnit<
-      "minute" | "second" | "millisecond" | "microsecond" | "nanosecond"
-    >;
-
-    /**
-     * Controls how rounding is performed:
-     * - `halfExpand`: Round to the nearest of the values allowed by
-     *   `roundingIncrement` and `smallestUnit`. When there is a tie, round up.
-     *   This mode is the default.
-     * - `ceil`: Always round up, towards the end of time.
-     * - `trunc`: Always round down, towards the beginning of time.
-     * - `floor`: Also round down, towards the beginning of time. This mode acts
-     *   the same as `trunc`, but it's included for consistency with
-     *   `Temporal.Duration.round()` where negative values are allowed and
-     *   `trunc` rounds towards zero, unlike `floor` which rounds towards
-     *   negative infinity which is usually unexpected. For this reason, `trunc`
-     *   is recommended for most use cases.
-     */
-    roundingMode?: RoundingMode;
-  };
-
-  /**
-   * @category Temporal
-   * @experimental
-   */
-  export type ShowCalendarOption = {
-    calendarName?: "auto" | "always" | "never" | "critical";
-  };
-
-  /**
-   * @category Temporal
-   * @experimental
-   */
-  export type CalendarTypeToStringOptions = Partial<
-    ToStringPrecisionOptions & ShowCalendarOption
-  >;
-
-  /**
-   * @category Temporal
-   * @experimental
-   */
-  export type ZonedDateTimeToStringOptions = Partial<
-    CalendarTypeToStringOptions & {
-      timeZoneName?: "auto" | "never" | "critical";
-      offset?: "auto" | "never";
-    }
-  >;
-
-  /**
-   * @category Temporal
-   * @experimental
-   */
-  export type InstantToStringOptions = Partial<
-    ToStringPrecisionOptions & {
-      timeZone: TimeZoneLike;
-    }
-  >;
-
-  /**
-   * Options to control the result of `until()` and `since()` methods in
-   * `Temporal` types.
-   *
-   * @category Temporal
-   * @experimental
-   */
-  export interface DifferenceOptions<T extends DateTimeUnit> {
-    /**
-     * The unit to round to. For example, to round to the nearest minute, use
-     * `smallestUnit: 'minute'`. This property is optional for `until()` and
-     * `since()`, because those methods default behavior is not to round.
-     * However, the same property is required for `round()`.
-     */
-    smallestUnit?: SmallestUnit<T>;
-
-    /**
-     * The largest unit to allow in the resulting `Temporal.Duration` object.
-     *
-     * Larger units will be "balanced" into smaller units. For example, if
-     * `largestUnit` is `'minute'` then a two-hour duration will be output as a
-     * 120-minute duration.
-     *
-     * Valid values may include `'year'`, `'month'`, `'week'`, `'day'`,
-     * `'hour'`, `'minute'`, `'second'`, `'millisecond'`, `'microsecond'`,
-     * `'nanosecond'` and `'auto'`, although some types may throw an exception
-     * if a value is used that would produce an invalid result. For example,
-     * `hours` is not accepted by `Temporal.PlainDate.prototype.since()`.
-     *
-     * The default is always `'auto'`, though the meaning of this depends on the
-     * type being used.
-     */
-    largestUnit?: LargestUnit<T>;
-
-    /**
-     * Allows rounding to an integer number of units. For example, to round to
-     * increments of a half hour, use `{ smallestUnit: 'minute',
-     * roundingIncrement: 30 }`.
-     */
-    roundingIncrement?: number;
-
-    /**
-     * Controls how rounding is performed:
-     * - `halfExpand`: Round to the nearest of the values allowed by
-     *   `roundingIncrement` and `smallestUnit`. When there is a tie, round away
-     *   from zero like `ceil` for positive durations and like `floor` for
-     *   negative durations.
-     * - `ceil`: Always round up, towards the end of time.
-     * - `trunc`: Always round down, towards the beginning of time. This mode is
-     *   the default.
-     * - `floor`: Also round down, towards the beginning of time. This mode acts the
-     *   same as `trunc`, but it's included for consistency with
-     *   `Temporal.Duration.round()` where negative values are allowed and
-     *   `trunc` rounds towards zero, unlike `floor` which rounds towards
-     *   negative infinity which is usually unexpected. For this reason, `trunc`
-     *   is recommended for most use cases.
-     */
-    roundingMode?: RoundingMode;
-  }
-
-  /**
-   * `round` methods take one required parameter. If a string is provided, the
-   * resulting `Temporal.Duration` object will be rounded to that unit. If an
-   * object is provided, its `smallestUnit` property is required while other
-   * properties are optional. A string is treated the same as an object whose
-   * `smallestUnit` property value is that string.
-   *
-   * @category Temporal
-   * @experimental
-   */
-  export type RoundTo<T extends DateTimeUnit> =
-    | SmallestUnit<T>
-    | {
-      /**
-       * The unit to round to. For example, to round to the nearest minute,
-       * use `smallestUnit: 'minute'`. This option is required. Note that the
-       * same-named property is optional when passed to `until` or `since`
-       * methods, because those methods do no rounding by default.
-       */
-      smallestUnit: SmallestUnit<T>;
-
-      /**
-       * Allows rounding to an integer number of units. For example, to round to
-       * increments of a half hour, use `{ smallestUnit: 'minute',
-       * roundingIncrement: 30 }`.
-       */
-      roundingIncrement?: number;
-
-      /**
-       * Controls how rounding is performed:
-       * - `halfExpand`: Round to the nearest of the values allowed by
-       *   `roundingIncrement` and `smallestUnit`. When there is a tie, round up.
-       *   This mode is the default.
-       * - `ceil`: Always round up, towards the end of time.
-       * - `trunc`: Always round down, towards the beginning of time.
-       * - `floor`: Also round down, towards the beginning of time. This mode acts
-       *   the same as `trunc`, but it's included for consistency with
-       *   `Temporal.Duration.round()` where negative values are allowed and
-       *   `trunc` rounds towards zero, unlike `floor` which rounds towards
-       *   negative infinity which is usually unexpected. For this reason, `trunc`
-       *   is recommended for most use cases.
-       */
-      roundingMode?: RoundingMode;
-    };
-
-  /**
-   * The `round` method of the `Temporal.Duration` accepts one required
-   * parameter. If a string is provided, the resulting `Temporal.Duration`
-   * object will be rounded to that unit. If an object is provided, the
-   * `smallestUnit` and/or `largestUnit` property is required, while other
-   * properties are optional. A string parameter is treated the same as an
-   * object whose `smallestUnit` property value is that string.
-   *
-   * @category Temporal
-   * @experimental
-   */
-  export type DurationRoundTo =
-    | SmallestUnit<DateTimeUnit>
-    | (
-      & (
-        | {
-          /**
-           * The unit to round to. For example, to round to the nearest
-           * minute, use `smallestUnit: 'minute'`. This property is normally
-           * required, but is optional if `largestUnit` is provided and not
-           * undefined.
-           */
-          smallestUnit: SmallestUnit<DateTimeUnit>;
-
-          /**
-           * The largest unit to allow in the resulting `Temporal.Duration`
-           * object.
-           *
-           * Larger units will be "balanced" into smaller units. For example,
-           * if `largestUnit` is `'minute'` then a two-hour duration will be
-           * output as a 120-minute duration.
-           *
-           * Valid values include `'year'`, `'month'`, `'week'`, `'day'`,
-           * `'hour'`, `'minute'`, `'second'`, `'millisecond'`,
-           * `'microsecond'`, `'nanosecond'` and `'auto'`.
-           *
-           * The default is `'auto'`, which means "the largest nonzero unit in
-           * the input duration". This default prevents expanding durations to
-           * larger units unless the caller opts into this behavior.
-           *
-           * If `smallestUnit` is larger, then `smallestUnit` will be used as
-           * `largestUnit`, superseding a caller-supplied or default value.
-           */
-          largestUnit?: LargestUnit<DateTimeUnit>;
-        }
-        | {
-          /**
-           * The unit to round to. For example, to round to the nearest
-           * minute, use `smallestUnit: 'minute'`. This property is normally
-           * required, but is optional if `largestUnit` is provided and not
-           * undefined.
-           */
-          smallestUnit?: SmallestUnit<DateTimeUnit>;
-
-          /**
-           * The largest unit to allow in the resulting `Temporal.Duration`
-           * object.
-           *
-           * Larger units will be "balanced" into smaller units. For example,
-           * if `largestUnit` is `'minute'` then a two-hour duration will be
-           * output as a 120-minute duration.
-           *
-           * Valid values include `'year'`, `'month'`, `'week'`, `'day'`,
-           * `'hour'`, `'minute'`, `'second'`, `'millisecond'`,
-           * `'microsecond'`, `'nanosecond'` and `'auto'`.
-           *
-           * The default is `'auto'`, which means "the largest nonzero unit in
-           * the input duration". This default prevents expanding durations to
-           * larger units unless the caller opts into this behavior.
-           *
-           * If `smallestUnit` is larger, then `smallestUnit` will be used as
-           * `largestUnit`, superseding a caller-supplied or default value.
-           */
-          largestUnit: LargestUnit<DateTimeUnit>;
-        }
-      )
-      & {
-        /**
-         * Allows rounding to an integer number of units. For example, to round
-         * to increments of a half hour, use `{ smallestUnit: 'minute',
-         * roundingIncrement: 30 }`.
-         */
-        roundingIncrement?: number;
-
-        /**
-         * Controls how rounding is performed:
-         * - `halfExpand`: Round to the nearest of the values allowed by
-         *   `roundingIncrement` and `smallestUnit`. When there is a tie, round
-         *   away from zero like `ceil` for positive durations and like `floor`
-         *   for negative durations. This mode is the default.
-         * - `ceil`: Always round towards positive infinity. For negative
-         *   durations this option will decrease the absolute value of the
-         *   duration which may be unexpected. To round away from zero, use
-         *   `ceil` for positive durations and `floor` for negative durations.
-         * - `trunc`: Always round down towards zero.
-         * - `floor`: Always round towards negative infinity. This mode acts the
-         *   same as `trunc` for positive durations but for negative durations
-         *   it will increase the absolute value of the result which may be
-         *   unexpected. For this reason, `trunc` is recommended for most "round
-         *   down" use cases.
-         */
-        roundingMode?: RoundingMode;
-
-        /**
-         * The starting point to use for rounding and conversions when
-         * variable-length units (years, months, weeks depending on the
-         * calendar) are involved. This option is required if any of the
-         * following are true:
-         * - `unit` is `'week'` or larger units
-         * - `this` has a nonzero value for `weeks` or larger units
-         *
-         * This value must be either a `Temporal.PlainDateTime`, a
-         * `Temporal.ZonedDateTime`, or a string or object value that can be
-         * passed to `from()` of those types. Examples:
-         * - `'2020-01-01T00:00-08:00[America/Los_Angeles]'`
-         * - `'2020-01-01'`
-         * - `Temporal.PlainDate.from('2020-01-01')`
-         *
-         * `Temporal.ZonedDateTime` will be tried first because it's more
-         * specific, with `Temporal.PlainDateTime` as a fallback.
-         *
-         * If the value resolves to a `Temporal.ZonedDateTime`, then operation
-         * will adjust for DST and other time zone transitions. Otherwise
-         * (including if this option is omitted), then the operation will ignore
-         * time zone transitions and all days will be assumed to be 24 hours
-         * long.
-         */
-        relativeTo?:
-          | Temporal.PlainDateTime
-          | Temporal.ZonedDateTime
-          | PlainDateTimeLike
-          | ZonedDateTimeLike
-          | string;
-      }
-    );
-
-  /**
-   * Options to control behavior of `Duration.prototype.total()`
-   *
-   * @category Temporal
-   * @experimental
-   */
-  export type DurationTotalOf =
-    | TotalUnit<DateTimeUnit>
-    | {
-      /**
-       * The unit to convert the duration to. This option is required.
-       */
-      unit: TotalUnit<DateTimeUnit>;
-
-      /**
-       * The starting point to use when variable-length units (years, months,
-       * weeks depending on the calendar) are involved. This option is required if
-       * any of the following are true:
-       * - `unit` is `'week'` or larger units
-       * - `this` has a nonzero value for `weeks` or larger units
-       *
-       * This value must be either a `Temporal.PlainDateTime`, a
-       * `Temporal.ZonedDateTime`, or a string or object value that can be passed
-       * to `from()` of those types. Examples:
-       * - `'2020-01-01T00:00-08:00[America/Los_Angeles]'`
-       * - `'2020-01-01'`
-       * - `Temporal.PlainDate.from('2020-01-01')`
-       *
-       * `Temporal.ZonedDateTime` will be tried first because it's more
-       * specific, with `Temporal.PlainDateTime` as a fallback.
-       *
-       * If the value resolves to a `Temporal.ZonedDateTime`, then operation will
-       * adjust for DST and other time zone transitions. Otherwise (including if
-       * this option is omitted), then the operation will ignore time zone
-       * transitions and all days will be assumed to be 24 hours long.
-       */
-      relativeTo?:
-        | Temporal.ZonedDateTime
-        | Temporal.PlainDateTime
-        | ZonedDateTimeLike
-        | PlainDateTimeLike
-        | string;
-    };
-
-  /**
-   * Options to control behavior of `Duration.compare()`
-   *
-   * @category Temporal
-   * @experimental
-   */
-  export interface DurationArithmeticOptions {
-    /**
-     * The starting point to use when variable-length units (years, months,
-     * weeks depending on the calendar) are involved. This option is required if
-     * either of the durations has a nonzero value for `weeks` or larger units.
-     *
-     * This value must be either a `Temporal.PlainDateTime`, a
-     * `Temporal.ZonedDateTime`, or a string or object value that can be passed
-     * to `from()` of those types. Examples:
-     * - `'2020-01-01T00:00-08:00[America/Los_Angeles]'`
-     * - `'2020-01-01'`
-     * - `Temporal.PlainDate.from('2020-01-01')`
-     *
-     * `Temporal.ZonedDateTime` will be tried first because it's more
-     * specific, with `Temporal.PlainDateTime` as a fallback.
-     *
-     * If the value resolves to a `Temporal.ZonedDateTime`, then operation will
-     * adjust for DST and other time zone transitions. Otherwise (including if
-     * this option is omitted), then the operation will ignore time zone
-     * transitions and all days will be assumed to be 24 hours long.
-     */
-    relativeTo?:
-      | Temporal.ZonedDateTime
-      | Temporal.PlainDateTime
-      | ZonedDateTimeLike
-      | PlainDateTimeLike
-      | string;
-  }
-
-  /**
-   * Options to control behaviour of `ZonedDateTime.prototype.getTimeZoneTransition()`
-   *
-   * @category Temporal
-   * @experimental
-   */
-  export type TransitionDirection = "next" | "previous" | {
-    direction: "next" | "previous";
-  };
-
-  /**
-   * @category Temporal
-   * @experimental
-   */
-  export type DurationLike = {
-    years?: number;
-    months?: number;
-    weeks?: number;
-    days?: number;
-    hours?: number;
-    minutes?: number;
-    seconds?: number;
-    milliseconds?: number;
-    microseconds?: number;
-    nanoseconds?: number;
-  };
-
-  /**
-   * A `Temporal.Duration` represents an immutable duration of time which can be
-   * used in date/time arithmetic.
-   *
-   * See https://tc39.es/proposal-temporal/docs/duration.html for more details.
-   *
-   * @category Temporal
-   * @experimental
-   */
-  export class Duration {
-    static from(
-      item: Temporal.Duration | DurationLike | string,
-    ): Temporal.Duration;
-    static compare(
-      one: Temporal.Duration | DurationLike | string,
-      two: Temporal.Duration | DurationLike | string,
-      options?: DurationArithmeticOptions,
-    ): ComparisonResult;
-    constructor(
-      years?: number,
-      months?: number,
-      weeks?: number,
-      days?: number,
-      hours?: number,
-      minutes?: number,
-      seconds?: number,
-      milliseconds?: number,
-      microseconds?: number,
-      nanoseconds?: number,
-    );
-    readonly sign: -1 | 0 | 1;
-    readonly blank: boolean;
-    readonly years: number;
-    readonly months: number;
-    readonly weeks: number;
-    readonly days: number;
-    readonly hours: number;
-    readonly minutes: number;
-    readonly seconds: number;
-    readonly milliseconds: number;
-    readonly microseconds: number;
-    readonly nanoseconds: number;
-    negated(): Temporal.Duration;
-    abs(): Temporal.Duration;
-    with(durationLike: DurationLike): Temporal.Duration;
-    add(
-      other: Temporal.Duration | DurationLike | string,
-      options?: DurationArithmeticOptions,
-    ): Temporal.Duration;
-    subtract(
-      other: Temporal.Duration | DurationLike | string,
-      options?: DurationArithmeticOptions,
-    ): Temporal.Duration;
-    round(roundTo: DurationRoundTo): Temporal.Duration;
-    total(totalOf: DurationTotalOf): number;
-    toLocaleString(
-      locales?: string | string[],
-      options?: Intl.DateTimeFormatOptions,
-    ): string;
-    toJSON(): string;
-    toString(options?: ToStringPrecisionOptions): string;
-    valueOf(): never;
-    readonly [Symbol.toStringTag]: "Temporal.Duration";
-  }
-
-  /**
-   * A `Temporal.Instant` is an exact point in time, with a precision in
-   * nanoseconds. No time zone or calendar information is present. Therefore,
-   * `Temporal.Instant` has no concept of days, months, or even hours.
-   *
-   * For convenience of interoperability, it internally uses nanoseconds since
-   * the {@link https://en.wikipedia.org/wiki/Unix_time|Unix epoch} (midnight
-   * UTC on January 1, 1970). However, a `Temporal.Instant` can be created from
-   * any of several expressions that refer to a single point in time, including
-   * an {@link https://en.wikipedia.org/wiki/ISO_8601|ISO 8601 string} with a
-   * time zone offset such as '2020-01-23T17:04:36.491865121-08:00'.
-   *
-   * See https://tc39.es/proposal-temporal/docs/instant.html for more details.
-   *
-   * @category Temporal
-   * @experimental
-   */
-  export class Instant {
-    static fromEpochMilliseconds(epochMilliseconds: number): Temporal.Instant;
-    static fromEpochNanoseconds(epochNanoseconds: bigint): Temporal.Instant;
-    static from(item: Temporal.Instant | string): Temporal.Instant;
-    static compare(
-      one: Temporal.Instant | string,
-      two: Temporal.Instant | string,
-    ): ComparisonResult;
-    constructor(epochNanoseconds: bigint);
-    readonly epochMilliseconds: number;
-    readonly epochNanoseconds: bigint;
-    equals(other: Temporal.Instant | string): boolean;
-    add(
-      durationLike:
-        | Omit<
-          Temporal.Duration | DurationLike,
-          "years" | "months" | "weeks" | "days"
-        >
-        | string,
-    ): Temporal.Instant;
-    subtract(
-      durationLike:
-        | Omit<
-          Temporal.Duration | DurationLike,
-          "years" | "months" | "weeks" | "days"
-        >
-        | string,
-    ): Temporal.Instant;
-    until(
-      other: Temporal.Instant | string,
-      options?: DifferenceOptions<
-        | "hour"
-        | "minute"
-        | "second"
-        | "millisecond"
-        | "microsecond"
-        | "nanosecond"
-      >,
-    ): Temporal.Duration;
-    since(
-      other: Temporal.Instant | string,
-      options?: DifferenceOptions<
-        | "hour"
-        | "minute"
-        | "second"
-        | "millisecond"
-        | "microsecond"
-        | "nanosecond"
-      >,
-    ): Temporal.Duration;
-    round(
-      roundTo: RoundTo<
-        | "hour"
-        | "minute"
-        | "second"
-        | "millisecond"
-        | "microsecond"
-        | "nanosecond"
-      >,
-    ): Temporal.Instant;
-    toZonedDateTimeISO(tzLike: TimeZoneLike): Temporal.ZonedDateTime;
-    toLocaleString(
-      locales?: string | string[],
-      options?: Intl.DateTimeFormatOptions,
-    ): string;
-    toJSON(): string;
-    toString(options?: InstantToStringOptions): string;
-    valueOf(): never;
-    readonly [Symbol.toStringTag]: "Temporal.Instant";
-  }
-
-  /**
-   * Any of these types can be passed to Temporal methods instead of a calendar ID.
-   *
-   * @category Temporal
-   * @experimental
-   */
-  export type CalendarLike =
-    | string
-    | ZonedDateTime
-    | PlainDateTime
-    | PlainDate
-    | PlainYearMonth
-    | PlainMonthDay;
-
-  /**
-   * @category Temporal
-   * @experimental
-   */
-  export type PlainDateLike = {
-    era?: string | undefined;
-    eraYear?: number | undefined;
-    year?: number;
-    month?: number;
-    monthCode?: string;
-    day?: number;
-    calendar?: CalendarLike;
-  };
-
-  /**
-   * A `Temporal.PlainDate` represents a calendar date. "Calendar date" refers to the
-   * concept of a date as expressed in everyday usage, independent of any time
-   * zone. For example, it could be used to represent an event on a calendar
-   * which happens during the whole day no matter which time zone it's happening
-   * in.
-   *
-   * See https://tc39.es/proposal-temporal/docs/date.html for more details.
-   *
-   * @category Temporal
-   * @experimental
-   */
-  export class PlainDate {
-    static from(
-      item: Temporal.PlainDate | PlainDateLike | string,
-      options?: AssignmentOptions,
-    ): Temporal.PlainDate;
-    static compare(
-      one: Temporal.PlainDate | PlainDateLike | string,
-      two: Temporal.PlainDate | PlainDateLike | string,
-    ): ComparisonResult;
-    constructor(
-      isoYear: number,
-      isoMonth: number,
-      isoDay: number,
-      calendar?: string,
-    );
-    readonly era: string | undefined;
-    readonly eraYear: number | undefined;
-    readonly year: number;
-    readonly month: number;
-    readonly monthCode: string;
-    readonly day: number;
-    readonly calendarId: string;
-    readonly dayOfWeek: number;
-    readonly dayOfYear: number;
-    readonly weekOfYear: number | undefined;
-    readonly yearOfWeek: number | undefined;
-    readonly daysInWeek: number;
-    readonly daysInYear: number;
-    readonly daysInMonth: number;
-    readonly monthsInYear: number;
-    readonly inLeapYear: boolean;
-    equals(other: Temporal.PlainDate | PlainDateLike | string): boolean;
-    with(
-      dateLike: PlainDateLike,
-      options?: AssignmentOptions,
-    ): Temporal.PlainDate;
-    withCalendar(calendar: CalendarLike): Temporal.PlainDate;
-    add(
-      durationLike: Temporal.Duration | DurationLike | string,
-      options?: ArithmeticOptions,
-    ): Temporal.PlainDate;
-    subtract(
-      durationLike: Temporal.Duration | DurationLike | string,
-      options?: ArithmeticOptions,
-    ): Temporal.PlainDate;
-    until(
-      other: Temporal.PlainDate | PlainDateLike | string,
-      options?: DifferenceOptions<"year" | "month" | "week" | "day">,
-    ): Temporal.Duration;
-    since(
-      other: Temporal.PlainDate | PlainDateLike | string,
-      options?: DifferenceOptions<"year" | "month" | "week" | "day">,
-    ): Temporal.Duration;
-    toPlainDateTime(
-      temporalTime?: Temporal.PlainTime | PlainTimeLike | string,
-    ): Temporal.PlainDateTime;
-    toZonedDateTime(
-      timeZoneAndTime:
-        | string
-        | {
-          timeZone: TimeZoneLike;
-          plainTime?: Temporal.PlainTime | PlainTimeLike | string;
-        },
-    ): Temporal.ZonedDateTime;
-    toPlainYearMonth(): Temporal.PlainYearMonth;
-    toPlainMonthDay(): Temporal.PlainMonthDay;
-    toLocaleString(
-      locales?: string | string[],
-      options?: Intl.DateTimeFormatOptions,
-    ): string;
-    toJSON(): string;
-    toString(options?: ShowCalendarOption): string;
-    valueOf(): never;
-    readonly [Symbol.toStringTag]: "Temporal.PlainDate";
-  }
-
-  /**
-   * @category Temporal
-   * @experimental
-   */
-  export type PlainDateTimeLike = {
-    era?: string | undefined;
-    eraYear?: number | undefined;
-    year?: number;
-    month?: number;
-    monthCode?: string;
-    day?: number;
-    hour?: number;
-    minute?: number;
-    second?: number;
-    millisecond?: number;
-    microsecond?: number;
-    nanosecond?: number;
-    calendar?: CalendarLike;
-  };
-
-  /**
-   * A `Temporal.PlainDateTime` represents a calendar date and wall-clock time, with
-   * a precision in nanoseconds, and without any time zone. Of the Temporal
-   * classes carrying human-readable time information, it is the most general
-   * and complete one. `Temporal.PlainDate`, `Temporal.PlainTime`, `Temporal.PlainYearMonth`,
-   * and `Temporal.PlainMonthDay` all carry less information and should be used when
-   * complete information is not required.
-   *
-   * See https://tc39.es/proposal-temporal/docs/datetime.html for more details.
-   *
-   * @category Temporal
-   * @experimental
-   */
-  export class PlainDateTime {
-    static from(
-      item: Temporal.PlainDateTime | PlainDateTimeLike | string,
-      options?: AssignmentOptions,
-    ): Temporal.PlainDateTime;
-    static compare(
-      one: Temporal.PlainDateTime | PlainDateTimeLike | string,
-      two: Temporal.PlainDateTime | PlainDateTimeLike | string,
-    ): ComparisonResult;
-    constructor(
-      isoYear: number,
-      isoMonth: number,
-      isoDay: number,
-      hour?: number,
-      minute?: number,
-      second?: number,
-      millisecond?: number,
-      microsecond?: number,
-      nanosecond?: number,
-      calendar?: string,
-    );
-    readonly era: string | undefined;
-    readonly eraYear: number | undefined;
-    readonly year: number;
-    readonly month: number;
-    readonly monthCode: string;
-    readonly day: number;
-    readonly hour: number;
-    readonly minute: number;
-    readonly second: number;
-    readonly millisecond: number;
-    readonly microsecond: number;
-    readonly nanosecond: number;
-    readonly calendarId: string;
-    readonly dayOfWeek: number;
-    readonly dayOfYear: number;
-    readonly weekOfYear: number | undefined;
-    readonly yearOfWeek: number | undefined;
-    readonly daysInWeek: number;
-    readonly daysInYear: number;
-    readonly daysInMonth: number;
-    readonly monthsInYear: number;
-    readonly inLeapYear: boolean;
-    equals(other: Temporal.PlainDateTime | PlainDateTimeLike | string): boolean;
-    with(
-      dateTimeLike: PlainDateTimeLike,
-      options?: AssignmentOptions,
-    ): Temporal.PlainDateTime;
-    withPlainTime(
-      timeLike?: Temporal.PlainTime | PlainTimeLike | string,
-    ): Temporal.PlainDateTime;
-    withCalendar(calendar: CalendarLike): Temporal.PlainDateTime;
-    add(
-      durationLike: Temporal.Duration | DurationLike | string,
-      options?: ArithmeticOptions,
-    ): Temporal.PlainDateTime;
-    subtract(
-      durationLike: Temporal.Duration | DurationLike | string,
-      options?: ArithmeticOptions,
-    ): Temporal.PlainDateTime;
-    until(
-      other: Temporal.PlainDateTime | PlainDateTimeLike | string,
-      options?: DifferenceOptions<
-        | "year"
-        | "month"
-        | "week"
-        | "day"
-        | "hour"
-        | "minute"
-        | "second"
-        | "millisecond"
-        | "microsecond"
-        | "nanosecond"
-      >,
-    ): Temporal.Duration;
-    since(
-      other: Temporal.PlainDateTime | PlainDateTimeLike | string,
-      options?: DifferenceOptions<
-        | "year"
-        | "month"
-        | "week"
-        | "day"
-        | "hour"
-        | "minute"
-        | "second"
-        | "millisecond"
-        | "microsecond"
-        | "nanosecond"
-      >,
-    ): Temporal.Duration;
-    round(
-      roundTo: RoundTo<
-        | "day"
-        | "hour"
-        | "minute"
-        | "second"
-        | "millisecond"
-        | "microsecond"
-        | "nanosecond"
-      >,
-    ): Temporal.PlainDateTime;
-    toZonedDateTime(
-      tzLike: TimeZoneLike,
-      options?: ToInstantOptions,
-    ): Temporal.ZonedDateTime;
-    toPlainDate(): Temporal.PlainDate;
-    toPlainTime(): Temporal.PlainTime;
-    toLocaleString(
-      locales?: string | string[],
-      options?: Intl.DateTimeFormatOptions,
-    ): string;
-    toJSON(): string;
-    toString(options?: CalendarTypeToStringOptions): string;
-    valueOf(): never;
-    readonly [Symbol.toStringTag]: "Temporal.PlainDateTime";
-  }
-
-  /**
-   * @category Temporal
-   * @experimental
-   */
-  export type PlainMonthDayLike = {
-    era?: string | undefined;
-    eraYear?: number | undefined;
-    year?: number;
-    month?: number;
-    monthCode?: string;
-    day?: number;
-    calendar?: CalendarLike;
-  };
-
-  /**
-   * A `Temporal.PlainMonthDay` represents a particular day on the calendar, but
-   * without a year. For example, it could be used to represent a yearly
-   * recurring event, like "Bastille Day is on the 14th of July."
-   *
-   * See https://tc39.es/proposal-temporal/docs/monthday.html for more details.
-   *
-   * @category Temporal
-   * @experimental
-   */
-  export class PlainMonthDay {
-    static from(
-      item: Temporal.PlainMonthDay | PlainMonthDayLike | string,
-      options?: AssignmentOptions,
-    ): Temporal.PlainMonthDay;
-    constructor(
-      isoMonth: number,
-      isoDay: number,
-      calendar?: string,
-      referenceISOYear?: number,
-    );
-    readonly monthCode: string;
-    readonly day: number;
-    readonly calendarId: string;
-    equals(other: Temporal.PlainMonthDay | PlainMonthDayLike | string): boolean;
-    with(
-      monthDayLike: PlainMonthDayLike,
-      options?: AssignmentOptions,
-    ): Temporal.PlainMonthDay;
-    toPlainDate(year: { year: number }): Temporal.PlainDate;
-    toLocaleString(
-      locales?: string | string[],
-      options?: Intl.DateTimeFormatOptions,
-    ): string;
-    toJSON(): string;
-    toString(options?: ShowCalendarOption): string;
-    valueOf(): never;
-    readonly [Symbol.toStringTag]: "Temporal.PlainMonthDay";
-  }
-
-  /**
-   * @category Temporal
-   * @experimental
-   */
-  export type PlainTimeLike = {
-    hour?: number;
-    minute?: number;
-    second?: number;
-    millisecond?: number;
-    microsecond?: number;
-    nanosecond?: number;
-  };
-
-  /**
-   * A `Temporal.PlainTime` represents a wall-clock time, with a precision in
-   * nanoseconds, and without any time zone. "Wall-clock time" refers to the
-   * concept of a time as expressed in everyday usage — the time that you read
-   * off the clock on the wall. For example, it could be used to represent an
-   * event that happens daily at a certain time, no matter what time zone.
-   *
-   * `Temporal.PlainTime` refers to a time with no associated calendar date; if you
-   * need to refer to a specific time on a specific day, use
-   * `Temporal.PlainDateTime`. A `Temporal.PlainTime` can be converted into a
-   * `Temporal.PlainDateTime` by combining it with a `Temporal.PlainDate` using the
-   * `toPlainDateTime()` method.
-   *
-   * See https://tc39.es/proposal-temporal/docs/plaintime.html for more details.
-   *
-   * @category Temporal
-   * @experimental
-   */
-  export class PlainTime {
-    static from(
-      item: Temporal.PlainTime | PlainTimeLike | string,
-      options?: AssignmentOptions,
-    ): Temporal.PlainTime;
-    static compare(
-      one: Temporal.PlainTime | PlainTimeLike | string,
-      two: Temporal.PlainTime | PlainTimeLike | string,
-    ): ComparisonResult;
-    constructor(
-      hour?: number,
-      minute?: number,
-      second?: number,
-      millisecond?: number,
-      microsecond?: number,
-      nanosecond?: number,
-    );
-    readonly hour: number;
-    readonly minute: number;
-    readonly second: number;
-    readonly millisecond: number;
-    readonly microsecond: number;
-    readonly nanosecond: number;
-    equals(other: Temporal.PlainTime | PlainTimeLike | string): boolean;
-    with(
-      timeLike: Temporal.PlainTime | PlainTimeLike,
-      options?: AssignmentOptions,
-    ): Temporal.PlainTime;
-    add(
-      durationLike: Temporal.Duration | DurationLike | string,
-      options?: ArithmeticOptions,
-    ): Temporal.PlainTime;
-    subtract(
-      durationLike: Temporal.Duration | DurationLike | string,
-      options?: ArithmeticOptions,
-    ): Temporal.PlainTime;
-    until(
-      other: Temporal.PlainTime | PlainTimeLike | string,
-      options?: DifferenceOptions<
-        | "hour"
-        | "minute"
-        | "second"
-        | "millisecond"
-        | "microsecond"
-        | "nanosecond"
-      >,
-    ): Temporal.Duration;
-    since(
-      other: Temporal.PlainTime | PlainTimeLike | string,
-      options?: DifferenceOptions<
-        | "hour"
-        | "minute"
-        | "second"
-        | "millisecond"
-        | "microsecond"
-        | "nanosecond"
-      >,
-    ): Temporal.Duration;
-    round(
-      roundTo: RoundTo<
-        | "hour"
-        | "minute"
-        | "second"
-        | "millisecond"
-        | "microsecond"
-        | "nanosecond"
-      >,
-    ): Temporal.PlainTime;
-    toLocaleString(
-      locales?: string | string[],
-      options?: Intl.DateTimeFormatOptions,
-    ): string;
-    toJSON(): string;
-    toString(options?: ToStringPrecisionOptions): string;
-    valueOf(): never;
-    readonly [Symbol.toStringTag]: "Temporal.PlainTime";
-  }
-
-  /**
-   * Any of these types can be passed to Temporal methods instead of a time zone ID.
-   *
-   * @category Temporal
-   * @experimental
-   */
-  export type TimeZoneLike = string | ZonedDateTime;
-
-  /**
-   * @category Temporal
-   * @experimental
-   */
-  export type PlainYearMonthLike = {
-    era?: string | undefined;
-    eraYear?: number | undefined;
-    year?: number;
-    month?: number;
-    monthCode?: string;
-    calendar?: CalendarLike;
-  };
-
-  /**
-   * A `Temporal.PlainYearMonth` represents a particular month on the calendar. For
-   * example, it could be used to represent a particular instance of a monthly
-   * recurring event, like "the June 2019 meeting".
-   *
-   * See https://tc39.es/proposal-temporal/docs/yearmonth.html for more details.
-   *
-   * @category Temporal
-   * @experimental
-   */
-  export class PlainYearMonth {
-    static from(
-      item: Temporal.PlainYearMonth | PlainYearMonthLike | string,
-      options?: AssignmentOptions,
-    ): Temporal.PlainYearMonth;
-    static compare(
-      one: Temporal.PlainYearMonth | PlainYearMonthLike | string,
-      two: Temporal.PlainYearMonth | PlainYearMonthLike | string,
-    ): ComparisonResult;
-    constructor(
-      isoYear: number,
-      isoMonth: number,
-      calendar?: string,
-      referenceISODay?: number,
-    );
-    readonly era: string | undefined;
-    readonly eraYear: number | undefined;
-    readonly year: number;
-    readonly month: number;
-    readonly monthCode: string;
-    readonly calendarId: string;
-    readonly daysInMonth: number;
-    readonly daysInYear: number;
-    readonly monthsInYear: number;
-    readonly inLeapYear: boolean;
-    equals(
-      other: Temporal.PlainYearMonth | PlainYearMonthLike | string,
-    ): boolean;
-    with(
-      yearMonthLike: PlainYearMonthLike,
-      options?: AssignmentOptions,
-    ): Temporal.PlainYearMonth;
-    add(
-      durationLike: Temporal.Duration | DurationLike | string,
-      options?: ArithmeticOptions,
-    ): Temporal.PlainYearMonth;
-    subtract(
-      durationLike: Temporal.Duration | DurationLike | string,
-      options?: ArithmeticOptions,
-    ): Temporal.PlainYearMonth;
-    until(
-      other: Temporal.PlainYearMonth | PlainYearMonthLike | string,
-      options?: DifferenceOptions<"year" | "month">,
-    ): Temporal.Duration;
-    since(
-      other: Temporal.PlainYearMonth | PlainYearMonthLike | string,
-      options?: DifferenceOptions<"year" | "month">,
-    ): Temporal.Duration;
-    toPlainDate(day: { day: number }): Temporal.PlainDate;
-    toLocaleString(
-      locales?: string | string[],
-      options?: Intl.DateTimeFormatOptions,
-    ): string;
-    toJSON(): string;
-    toString(options?: ShowCalendarOption): string;
-    valueOf(): never;
-    readonly [Symbol.toStringTag]: "Temporal.PlainYearMonth";
-  }
-
-  /**
-   * @category Temporal
-   * @experimental
-   */
-  export type ZonedDateTimeLike = {
-    era?: string | undefined;
-    eraYear?: number | undefined;
-    year?: number;
-    month?: number;
-    monthCode?: string;
-    day?: number;
-    hour?: number;
-    minute?: number;
-    second?: number;
-    millisecond?: number;
-    microsecond?: number;
-    nanosecond?: number;
-    offset?: string;
-    timeZone?: TimeZoneLike;
-    calendar?: CalendarLike;
-  };
-
-  /**
-   * @category Temporal
-   * @experimental
-   */
-  export class ZonedDateTime {
-    static from(
-      item: Temporal.ZonedDateTime | ZonedDateTimeLike | string,
-      options?: ZonedDateTimeAssignmentOptions,
-    ): ZonedDateTime;
-    static compare(
-      one: Temporal.ZonedDateTime | ZonedDateTimeLike | string,
-      two: Temporal.ZonedDateTime | ZonedDateTimeLike | string,
-    ): ComparisonResult;
-    constructor(epochNanoseconds: bigint, timeZone: string, calendar?: string);
-    readonly era: string | undefined;
-    readonly eraYear: number | undefined;
-    readonly year: number;
-    readonly month: number;
-    readonly monthCode: string;
-    readonly day: number;
-    readonly hour: number;
-    readonly minute: number;
-    readonly second: number;
-    readonly millisecond: number;
-    readonly microsecond: number;
-    readonly nanosecond: number;
-    readonly timeZoneId: string;
-    readonly calendarId: string;
-    readonly dayOfWeek: number;
-    readonly dayOfYear: number;
-    readonly weekOfYear: number | undefined;
-    readonly yearOfWeek: number | undefined;
-    readonly hoursInDay: number;
-    readonly daysInWeek: number;
-    readonly daysInMonth: number;
-    readonly daysInYear: number;
-    readonly monthsInYear: number;
-    readonly inLeapYear: boolean;
-    readonly offsetNanoseconds: number;
-    readonly offset: string;
-    readonly epochMilliseconds: number;
-    readonly epochNanoseconds: bigint;
-    equals(other: Temporal.ZonedDateTime | ZonedDateTimeLike | string): boolean;
-    with(
-      zonedDateTimeLike: ZonedDateTimeLike,
-      options?: ZonedDateTimeAssignmentOptions,
-    ): Temporal.ZonedDateTime;
-    withPlainTime(
-      timeLike?: Temporal.PlainTime | PlainTimeLike | string,
-    ): Temporal.ZonedDateTime;
-    withCalendar(calendar: CalendarLike): Temporal.ZonedDateTime;
-    withTimeZone(timeZone: TimeZoneLike): Temporal.ZonedDateTime;
-    add(
-      durationLike: Temporal.Duration | DurationLike | string,
-      options?: ArithmeticOptions,
-    ): Temporal.ZonedDateTime;
-    subtract(
-      durationLike: Temporal.Duration | DurationLike | string,
-      options?: ArithmeticOptions,
-    ): Temporal.ZonedDateTime;
-    until(
-      other: Temporal.ZonedDateTime | ZonedDateTimeLike | string,
-      options?: Temporal.DifferenceOptions<
-        | "year"
-        | "month"
-        | "week"
-        | "day"
-        | "hour"
-        | "minute"
-        | "second"
-        | "millisecond"
-        | "microsecond"
-        | "nanosecond"
-      >,
-    ): Temporal.Duration;
-    since(
-      other: Temporal.ZonedDateTime | ZonedDateTimeLike | string,
-      options?: Temporal.DifferenceOptions<
-        | "year"
-        | "month"
-        | "week"
-        | "day"
-        | "hour"
-        | "minute"
-        | "second"
-        | "millisecond"
-        | "microsecond"
-        | "nanosecond"
-      >,
-    ): Temporal.Duration;
-    round(
-      roundTo: RoundTo<
-        | "day"
-        | "hour"
-        | "minute"
-        | "second"
-        | "millisecond"
-        | "microsecond"
-        | "nanosecond"
-      >,
-    ): Temporal.ZonedDateTime;
-    startOfDay(): Temporal.ZonedDateTime;
-    getTimeZoneTransition(
-      direction: TransitionDirection,
-    ): Temporal.ZonedDateTime | null;
-    toInstant(): Temporal.Instant;
-    toPlainDateTime(): Temporal.PlainDateTime;
-    toPlainDate(): Temporal.PlainDate;
-    toPlainTime(): Temporal.PlainTime;
-    toLocaleString(
-      locales?: string | string[],
-      options?: Intl.DateTimeFormatOptions,
-    ): string;
-    toJSON(): string;
-    toString(options?: ZonedDateTimeToStringOptions): string;
-    valueOf(): never;
-    readonly [Symbol.toStringTag]: "Temporal.ZonedDateTime";
-  }
-
-  /**
-   * The `Temporal.Now` object has several methods which give information about
-   * the current date, time, and time zone.
-   *
-   * See https://tc39.es/proposal-temporal/docs/now.html for more details.
-   *
-   * @category Temporal
-   * @experimental
-   */
-  export const Now: {
-    /**
-     * Get the exact system date and time as a `Temporal.Instant`.
-     *
-     * This method gets the current exact system time, without regard to
-     * calendar or time zone. This is a good way to get a timestamp for an
-     * event, for example. It works like the old-style JavaScript `Date.now()`,
-     * but with nanosecond precision instead of milliseconds.
-     *
-     * Note that a `Temporal.Instant` doesn't know about time zones. For the
-     * exact time in a specific time zone, use `Temporal.Now.zonedDateTimeISO`
-     * or `Temporal.Now.zonedDateTime`.
-     */
-    instant: () => Temporal.Instant;
-
-    /**
-     * Get the current calendar date and clock time in a specific time zone,
-     * using the ISO 8601 calendar.
-     *
-     * @param {TimeZoneLike} [tzLike] -
-     * {@link https://en.wikipedia.org/wiki/List_of_tz_database_time_zones|IANA time zone identifier}
-     * string (e.g. `'Europe/London'`). If omitted, the environment's
-     * current time zone will be used.
-     */
-    zonedDateTimeISO: (tzLike?: TimeZoneLike) => Temporal.ZonedDateTime;
-
-    /**
-     * Get the current date and clock time in a specific time zone, using the
-     * ISO 8601 calendar.
-     *
-     * Note that the `Temporal.PlainDateTime` type does not persist the time zone,
-     * but retaining the time zone is required for most time-zone-related use
-     * cases. Therefore, it's usually recommended to use
-     * `Temporal.Now.zonedDateTimeISO` instead of this function.
-     *
-     * @param {TimeZoneLike} [tzLike] -
-     * {@link https://en.wikipedia.org/wiki/List_of_tz_database_time_zones|IANA time zone identifier}
-     * string (e.g. `'Europe/London'`). If omitted, the environment's
-     * current time zone will be used.
-     */
-    plainDateTimeISO: (tzLike?: TimeZoneLike) => Temporal.PlainDateTime;
-
-    /**
-     * Get the current date in a specific time zone, using the ISO 8601
-     * calendar.
-     *
-     * @param {TimeZoneLike} [tzLike] -
-     * {@link https://en.wikipedia.org/wiki/List_of_tz_database_time_zones|IANA time zone identifier}
-     * string (e.g. `'Europe/London'`). If omitted, the environment's
-     * current time zone will be used.
-     */
-    plainDateISO: (tzLike?: TimeZoneLike) => Temporal.PlainDate;
-
-    /**
-     * Get the current clock time in a specific time zone, using the ISO 8601 calendar.
-     *
-     * @param {TimeZoneLike} [tzLike] -
-     * {@link https://en.wikipedia.org/wiki/List_of_tz_database_time_zones|IANA time zone identifier}
-     * string (e.g. `'Europe/London'`). If omitted, the environment's
-     * current time zone will be used.
-     */
-    plainTimeISO: (tzLike?: TimeZoneLike) => Temporal.PlainTime;
-
-    /**
-     * Get the identifier of the environment's current time zone.
-     *
-     * This method gets the identifier of the current system time zone. This
-     * will usually be a named
-     * {@link https://en.wikipedia.org/wiki/List_of_tz_database_time_zones|IANA time zone}.
-     */
-    timeZoneId: () => string;
-
-    readonly [Symbol.toStringTag]: "Temporal.Now";
-  };
-}
-
-/**
- * @category Temporal
- * @experimental
- */
-interface Date {
-  toTemporalInstant(): Temporal.Instant;
-}
 
 /**
  * @category Intl
@@ -21545,35 +23208,129 @@ declare namespace Intl {
  * @category Platform
  * @experimental
  */
-interface ErrorConstructor {
-  /**
-   * Indicates whether the argument provided is a built-in Error instance or not.
-   */
-  isError(error: unknown): error is Error;
-}
-
-/**
- * @category Platform
- * @experimental
- */
-interface Atomics {
-  /**
-   * Signals to the CPU that it is running in a spin-wait loop.
-   * @param durationHint An integer that may be used to determine how many times
-   * the signal is sent.
-   */
-  pause(durationHint?: number): void;
-}
-
-/**
- * @category Platform
- * @experimental
- */
 interface RegExpConstructor {
   /**
    * Returns a new string in which characters that are potentially special in a
    * regular expression pattern are replaced with escape sequences.
    * @param string The string to escape.
+   *
+   * [MDN](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/RegExp/escape)
    */
   escape(string: string): string;
 }
+
+/**
+ * @category Platform
+ * @experimental
+ */
+interface Uint8Array {
+  /**
+   * Converts this `Uint8Array` object to a base64 string.
+   *
+   * [MDN](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Uint8Array/toBase64)
+   */
+  toBase64(options?: {
+    alphabet?: "base64" | "base64url";
+    omitPadding?: boolean;
+  }): string;
+  /**
+   * Populates this `Uint8Array` object with data from a base64 string.
+   *
+   * [MDN](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Uint8Array/setFromBase64)
+   */
+  setFromBase64(string: string, options?: {
+    alphabet?: "base64" | "base64url";
+    lastChunkHandling?: "loose" | "strict" | "stop-before-partial";
+  }): { read: number; written: number };
+  /**
+   * Converts this `Uint8Array` object to a hex string.
+   *
+   * [MDN](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Uint8Array/toHex)
+   */
+  toHex(): string;
+  /**
+   * Populates this `Uint8Array` object with data from a hex string.
+   *
+   * [MDN](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Uint8Array/setFromHex)
+   */
+  setFromHex(string: string): { read: number; written: number };
+}
+
+/**
+ * @category Platform
+ * @experimental
+ */
+interface Uint8ArrayConstructor {
+  /**
+   * Creates a new `Uint8Array` object from a base64 string.
+   *
+   * [MDN](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Uint8Array/fromBase64)
+   */
+  fromBase64(string: string, options?: {
+    alphabet?: "base64" | "base64url";
+    lastChunkHandling?: "loose" | "strict" | "stop-before-partial";
+  }): Uint8Array<ArrayBuffer>;
+  /**
+   * Creates a new `Uint8Array` object from a hex string.
+   *
+   * [MDN](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Uint8Array/fromHex)
+   */
+  fromHex(string: string): Uint8Array<ArrayBuffer>;
+}
+
+/** **UNSTABLE**: New API, yet to be vetted.
+ *
+ * A single CSS rule of a {@linkcode CSSStyleSheet}, as returned from its
+ * `cssRules` property. Available only when the `--unstable-raw-imports` flag
+ * is enabled.
+ *
+ * Note: `cssText` is the verbatim text of one top-level rule of the style
+ * sheet; Deno does not implement a full CSS object model.
+ *
+ * @category Platform
+ * @experimental
+ */
+interface CSSRule {
+  readonly cssText: string;
+}
+
+/** **UNSTABLE**: New API, yet to be vetted.
+ *
+ * @category Platform
+ * @experimental
+ */
+declare var CSSRule: {
+  readonly prototype: CSSRule;
+  new (): never;
+};
+
+/** **UNSTABLE**: New API, yet to be vetted.
+ *
+ * A style sheet backing a CSS module script. This is what a
+ * `import sheet from "./styles.css" with { type: "css" }` import evaluates
+ * to. Available only when the `--unstable-raw-imports` flag is enabled.
+ *
+ * Deno has no DOM, so a sheet can't be adopted anywhere; the implementation
+ * is backed by the raw CSS text.
+ *
+ * Note: `cssRules` returns a frozen array of {@linkcode CSSRule} instead of a
+ * live `CSSRuleList`.
+ *
+ * @category Platform
+ * @experimental
+ */
+interface CSSStyleSheet {
+  readonly cssRules: readonly CSSRule[];
+  replace(text: string): Promise<CSSStyleSheet>;
+  replaceSync(text: string): void;
+}
+
+/** **UNSTABLE**: New API, yet to be vetted.
+ *
+ * @category Platform
+ * @experimental
+ */
+declare var CSSStyleSheet: {
+  readonly prototype: CSSStyleSheet;
+  new (): CSSStyleSheet;
+};

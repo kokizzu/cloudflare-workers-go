@@ -21,12 +21,7 @@ var deno = js.Global().Get("Deno")
 // jsConverter is implemented by generated struct types that can convert
 // themselves to a JavaScript object.
 type jsConverter interface {
-	ToJS() js.Value
-}
-
-// awaitResult waits for a JavaScript Promise to settle.
-func awaitResult(p js.Value) (js.Value, error) {
-	return jsutil.AwaitPromise(p)
+	toJS() js.Value
 }
 
 func isNullish(v js.Value) bool {
@@ -107,7 +102,7 @@ func anyToJS(v any) js.Value {
 	case js.Value:
 		return x
 	case jsConverter:
-		return x.ToJS()
+		return x.toJS()
 	case []byte:
 		return bytesToUint8Array(x)
 	case time.Time:
@@ -163,7 +158,7 @@ func ptrToJS[T any](p *T, conv func(T) js.Value) js.Value {
 // strMapToJS converts a Go map[string]string into a JavaScript object.
 func strMapToJS(m map[string]string) js.Value {
 	if m == nil {
-		return js.Null()
+		return js.Undefined()
 	}
 	o := jsutil.NewObject()
 	for k, v := range m {
@@ -201,4 +196,13 @@ func dateToTime(v js.Value) time.Time {
 // for APIs that take bigint arguments, such as NewKvU64.
 func BigInt(u uint64) js.Value {
 	return js.Global().Get("BigInt").Invoke(strconv.FormatUint(u, 10))
+}
+
+// bigIntToUint64 converts a JavaScript BigInt into a uint64.
+func bigIntToUint64(v js.Value) uint64 {
+	if isNullish(v) {
+		return 0
+	}
+	u, _ := strconv.ParseUint(v.Call("toString").String(), 10, 64)
+	return u
 }

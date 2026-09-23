@@ -13,6 +13,6 @@
   - switch generated file depends on Go / TinyGo.
 * `-runtime`
   - target runtime: `cloudflare` (default), `browser`, or `deno`.
-  - `deno` also generates `main.ts`, an entry point that serves the worker via `Deno.serve`.
+  - `deno` also generates `main.mjs`, an entry point that serves the worker via `Deno.serve`.
 * `-o`
   - change output directory (default: `build`)

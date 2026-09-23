@@ -4,30 +4,85 @@
 
 package deno
 
+// The current process ID of this instance of the Deno CLI.
+//
+// ```ts
+// console.log(Deno.pid);
+// ```
+//   - https://docs.deno.com/api/deno/~/Deno.pid
 func GetPid() float64 {
 	return getFloat(deno.Get("pid"))
 }
 
+// The process ID of parent process of this instance of the Deno CLI.
+//
+// ```ts
+// console.log(Deno.ppid);
+// ```
+//   - https://docs.deno.com/api/deno/~/Deno.ppid
 func GetPpid() float64 {
 	return getFloat(deno.Get("ppid"))
 }
 
+// Reflects the `NO_COLOR` environment variable at program start.
+//
+// When the value is `true`, the Deno CLI will attempt to not send color codes
+// to `stderr` or `stdout` and other command line programs should also attempt
+// to respect this value.
+//
+// See: https://no-color.org/
+//   - https://docs.deno.com/api/deno/~/Deno.noColor
 func GetNoColor() bool {
 	return getBool(deno.Get("noColor"))
 }
 
+// An interface containing methods to interact with the process environment
+// variables.
+//   - https://docs.deno.com/api/deno/~/Deno.env
 func GetEnv() *Env {
-	return EnvFromJS(deno.Get("env"))
+	return envFromJS(deno.Get("env"))
 }
 
+// Version information related to the current Deno CLI runtime environment.
+//
+// Users are discouraged from code branching based on this information, as
+// assumptions about what is available in what build environment might change
+// over time. Developers should specifically sniff out the features they
+// intend to use.
+//
+// The intended use for the information is for logging and debugging purposes.
+//   - https://docs.deno.com/api/deno/~/Deno.version
 func GetVersion() Version {
-	return VersionFromJS(deno.Get("version"))
+	return versionFromJS(deno.Get("version"))
 }
 
+// Returns the script arguments to the program.
+//
+// Give the following command line invocation of Deno:
+//
+// ```sh
+// deno eval "console.log(Deno.args)" Sushi Maguro Hamachi
+// ```
+//
+// Then `Deno.args` will contain:
+//
+// ```ts
+// [ "Sushi", "Maguro", "Hamachi" ]
+// ```
+//
+// If you are looking for a structured way to parse arguments, there is
+// [`parseArgs()`](https://jsr.io/@std/cli/doc/parse-args/~/parseArgs) from
+// the Deno Standard Library.
+//   - https://docs.deno.com/api/deno/~/Deno.args
 func GetArgs() []string {
 	return sliceFromJS(deno.Get("args"), getString)
 }
 
+// The URL of the entrypoint module entered from the command-line. It
+// requires read permission to the CWD.
+//
+// Also see {@linkcode ImportMeta} for other related information.
+//   - https://docs.deno.com/api/deno/~/Deno.mainModule
 func GetMainModule() string {
 	return getString(deno.Get("mainModule"))
 }
